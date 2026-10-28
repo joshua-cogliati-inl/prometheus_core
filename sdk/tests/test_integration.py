@@ -30,6 +30,7 @@ from prometheus_api.storage_client import (
     ItemUpdate,
     RelationshipCreate,
 )
+from prometheus_api.storage_client.exceptions import ItemNotFoundError
 
 # Test marker to identify test items for safe cleanup
 TEST_MARKER = "storage-client-test-suite"
@@ -348,27 +349,27 @@ class TestSearch:
         # This test just verifies the search endpoint works
         try:
             results = client.search.query("Test Item", page=1, page_size=10)
-            assert results.items is not None
-            assert results.page_info is not None
-        except Exception as e:
-            # Search endpoints return 404 on this DeepLynx instance
-            # This is expected if search functionality is not enabled/configured
+        except ItemNotFoundError as e:
+            # Only a 404 means the endpoint is absent (search not enabled/configured). Any other
+            # error, or a failed assertion below, is a real failure and must not be skipped.
             pytest.skip(f"Search endpoint not available on this DeepLynx instance: {e}")
+        assert results.items is not None
+        assert results.page_info is not None
 
     def test_search_recent(self, client, test_items):
         """Test getting recent items."""
         try:
             recent = client.search.recent(limit=10)
-            assert len(recent) > 0
-
-            # Our test items should be recent
-            recent_ids = {item.id for item in recent}
-            test_ids = {item.id for item in test_items}
-
-            # At least some overlap expected
-            assert len(recent_ids & test_ids) > 0
-        except Exception as e:
+        except ItemNotFoundError as e:
             pytest.skip(f"Recent search not available: {e}")
+        assert len(recent) > 0
+
+        # Our test items should be recent
+        recent_ids = {item.id for item in recent}
+        test_ids = {item.id for item in test_items}
+
+        # At least some overlap expected
+        assert len(recent_ids & test_ids) > 0
 
 
 class TestRelationships:
@@ -396,7 +397,8 @@ class TestRelationships:
             assert rel.from_item_id == item1.id
             assert rel.to_item_id == item2.id
 
-        except Exception as e:
+        except ItemNotFoundError as e:
+            # Only a 404 means the edge endpoints are absent; anything else is a real failure
             pytest.skip(f"Relationships not available or configured: {e}")
         finally:
             # Always attempt cleanup
@@ -435,7 +437,7 @@ class TestRelationships:
             found = any(r.from_item_id == item1.id and r.to_item_id == item2.id for r in rels)
             assert found, f"Created relationship {item1.id}→{item2.id} not found in results"
 
-        except Exception as e:
+        except ItemNotFoundError as e:
             pytest.skip(f"Relationships not available: {e}")
         finally:
             # Always attempt cleanup
