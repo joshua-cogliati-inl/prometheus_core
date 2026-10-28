@@ -101,6 +101,40 @@ async def test_item_create_payloads_match_between_sync_and_async():
     assert kwargs["params"] == {"dataSourceId": 7}
 
 
+@pytest.mark.parametrize("description", [None, ""])
+async def test_item_create_defaults_missing_description_to_name(description):
+    """Covers REQ-002-02: DeepLynx rejects an empty description, so default to the item name."""
+    sync_client = SyncClient(item_payload())
+    async_client = AsyncClient(item_payload())
+    item = ItemCreate(name="Sample", description=description)
+
+    ItemsResource(sync_client).create(item)
+    await AsyncItemsResource(async_client).create(item)
+
+    sync_json = sync_client.calls[0][2]["json"]
+    async_json = async_client.calls[0][2]["json"]
+    assert sync_json["description"] == "Sample"
+    assert async_json["description"] == "Sample"
+
+
+@pytest.mark.parametrize("description", [None, ""])
+async def test_item_bulk_create_defaults_missing_description_to_name(description):
+    """Covers REQ-002-02 for the bulk endpoint, sync and async."""
+    sync_client = SyncClient([item_payload(id=1), item_payload(id=2)])
+    async_client = AsyncClient([item_payload(id=1), item_payload(id=2)])
+    items = [
+        ItemCreate(name="First", description=description),
+        ItemCreate(name="Second", description="Kept as given"),
+    ]
+
+    ItemsResource(sync_client).bulk_create(items)
+    await AsyncItemsResource(async_client).bulk_create(items)
+
+    for client in (sync_client, async_client):
+        payload = client.calls[0][2]["json"]
+        assert [entry["description"] for entry in payload] == ["First", "Kept as given"]
+
+
 async def test_item_update_payloads_match_between_sync_and_async():
     sync_client = SyncClient(item_payload(name="Updated"))
     async_client = AsyncClient(item_payload(name="Updated"))

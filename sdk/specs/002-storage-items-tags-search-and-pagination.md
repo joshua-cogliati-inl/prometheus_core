@@ -9,7 +9,7 @@ Expose DeepLynx records as typed `Item` objects with predictable CRUD, tagging, 
 
 ## Requirements
 - REQ-002-01: Item create MUST POST to `/organizations/{org}/projects/{project}/records` with `dataSourceId` and a snake_case payload containing `name`, `description`, `properties`, `original_id`, and optional `class_id`.
-- REQ-002-02: Item create MUST default missing `description` to `""` and missing `original_id` to a client-generated value.
+- REQ-002-02: Item create and bulk create MUST default a missing or empty `description` to the item's `name` (DeepLynx rejects an empty description with `400 The Description field is required`), and a missing `original_id` to a client-generated value.
 - REQ-002-03: Item create with tag names MUST resolve/add those tags and refetch the created item.
 - REQ-002-04: Item update MUST use `PUT /records/{item_id}` and include only fields explicitly provided on `ItemUpdate`.
 - REQ-002-05: Item list MUST return `Page[Item]` and compute `has_next`/`has_previous` for both list-shaped and wrapped DeepLynx responses.

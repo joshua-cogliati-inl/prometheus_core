@@ -42,7 +42,8 @@ class ItemsResource(BaseResource):
         # Prepare payload with snake_case field names for DeepLynx API
         payload: Dict[str, Any] = {
             "name": item.name,
-            "description": item.description or "",  # Required field
+            # Required field; the server rejects an empty string, so default to the name
+            "description": item.description or item.name,
             "properties": item.properties,  # Required field
             "original_id": item.original_id or f"client-{item.name}-{id(item)}",  # Required field
         }
@@ -233,7 +234,7 @@ class ItemsResource(BaseResource):
         payload = [
             {
                 "name": item.name,
-                "description": item.description or "",
+                "description": item.description or item.name,
                 "properties": item.properties,
                 "original_id": item.original_id or f"client-{item.name}-{i}",
                 "class_id": item.class_id,
