@@ -12,9 +12,10 @@
 
 """Relationship models for the storage client."""
 
+import json
 from typing import Any, Dict, List, Optional
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class RelationshipBase(BaseModel):
@@ -49,6 +50,25 @@ class Relationship(RelationshipBase):
     data_source_id: Optional[int] = Field(None, description="Source data identifier")
 
     model_config = {"from_attributes": True}
+
+    @field_validator("properties", mode="before")
+    @classmethod
+    def _decode_json_properties(cls, value: Any) -> Any:
+        """Accept the JSON-encoded string DeepLynx returns for edge properties.
+
+        The edge endpoints return ``properties`` as a string (for example ``"{}"``) or ``null``,
+        not as an object. Undecodable or non-object strings become an empty dict, matching how
+        item properties are parsed.
+        """
+        if value is None:
+            return {}
+        if isinstance(value, str):
+            try:
+                decoded = json.loads(value)
+            except (TypeError, ValueError):
+                return {}
+            return decoded if isinstance(decoded, dict) else {}
+        return value
 
 
 class BulkRelationshipCreate(BaseModel):
