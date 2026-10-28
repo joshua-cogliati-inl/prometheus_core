@@ -1,7 +1,7 @@
 # 001 — Storage configuration and authentication
 
 status: implemented
-sources: README.md, docs/storage-client/GUIDE.md, docs/ENV_SETUP.md, prometheus_api/storage_client/connection.py, prometheus_api/storage_client/client.py, prometheus_api/storage_client/async_client.py, prometheus_api/storage_client/auth.py, prometheus_api/storage_client/exceptions.py, tests/test_connection.py, tests/test_env_config.py, tests/test_exceptions.py
+sources: README.md, docs/storage-client/GUIDE.md, docs/ENV_SETUP.md, prometheus_api/storage_client/connection.py, prometheus_api/storage_client/client.py, prometheus_api/storage_client/async_client.py, prometheus_api/storage_client/auth.py, prometheus_api/storage_client/exceptions.py, tests/test_connection.py, tests/test_env_config.py, tests/test_exceptions.py, tests/test_client_errors.py
 depends-on: none
 
 ## Purpose
@@ -16,8 +16,8 @@ Provide a single typed contract for connecting to DeepLynx and a consistent sync
 - REQ-001-06: `ConnectionConfig.from_env(...)` MUST load DeepLynx credentials, org/project IDs, optional data source ID, and base URL from an explicit env file, then environment variables, with explicit `organization_id` and `project_id` parameters overriding env values.
 - REQ-001-07: `StorageClient` and `AsyncStorageClient` MUST initialize their HTTP and auth handlers only through their context manager protocols and MUST raise `StorageClientError` if a request is made before initialization.
 - REQ-001-08: Client resource properties MUST lazily construct stable handlers for `items`, `files`, `relationships`, `search`, `tags`, and `timeseries`.
-- REQ-001-09: Client requests MUST attach bearer authentication headers and merge caller-provided request headers without dropping auth headers. ⚠ untested
-- REQ-001-10: Client requests MUST retry timeout and connection failures up to `max_retries`, and MUST map 401, 404, other 4xx, and 5xx responses to `AuthenticationError`, `ItemNotFoundError`, `ValidationError`, and `APIError` respectively. ⚠ untested
+- REQ-001-09: Client requests MUST attach bearer authentication headers and merge caller-provided request headers without dropping auth headers.
+- REQ-001-10: Client requests MUST retry timeout and connection failures up to `max_retries`, and MUST map 401, 404, other 4xx, and 5xx responses to `AuthenticationError`, `ItemNotFoundError`, `ValidationError`, and `APIError` respectively. The mapped exception MUST reach the caller as that type, with the server's message and (for `ValidationError`/`APIError`) the response body in `details`; it MUST NOT be re-wrapped in a generic `StorageClientError`.
 - REQ-001-11: API-key authentication MUST exchange `apiKey` and `apiSecret` for a JWT through `/oauth/tokens`, cache it, and refresh managed tokens before expiry or after one managed-token 401. ⚠ untested
 - REQ-001-12: If `data_source_id` is not configured, clients MUST fetch and cache the project default data source or raise a `StorageClientError` that instructs users to set `DEEPLYNX_DATA_SOURCE_ID`. ⚠ untested
 
@@ -25,6 +25,7 @@ Provide a single typed contract for connecting to DeepLynx and a consistent sync
 - BEH-001-01: GIVEN a config with API key credentials WHEN request headers are requested THEN the auth handler obtains a JWT and returns `Authorization: Bearer <token>`.
 - BEH-001-02: GIVEN a config with a JWT token WHEN request headers are requested THEN the auth handler uses that token directly and does not manage refresh.
 - BEH-001-03: GIVEN an HTTP 404 response WHEN the storage client handles it THEN an `ItemNotFoundError` is raised with the API error message when available.
+- BEH-001-04: GIVEN an HTTP 400 response with a JSON error body WHEN a request is made through `StorageClient` or `AsyncStorageClient` THEN a `ValidationError` carrying the server's error message and the parsed body in `details` reaches the caller, and the request is not retried.
 
 ## Interfaces
 - `ConnectionConfig(organization_id: int, project_id: int, data_source_id: int | None = None, base_url: str = ..., api_key: str | None = None, api_secret: str | None = None, jwt_token: str | None = None, timeout: float = 30.0, max_retries: int = 3, verify_ssl: bool = True)`
@@ -50,5 +51,5 @@ Provide a single typed contract for connecting to DeepLynx and a consistent sync
 - This spec does not require storage clients to be usable outside their context manager protocols.
 
 ## Open questions
-- Token refresh, retry behavior, and response error mapping have limited direct unit coverage compared with configuration loading.
+- Token refresh has no direct unit coverage (REQ-001-11); retry behavior and response error mapping are covered by `tests/test_client_errors.py`.
 - `ConnectionConfig` forbids extra fields through Pydantic config, but there is no explicit regression test for unknown fields.

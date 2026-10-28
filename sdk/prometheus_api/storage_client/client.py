@@ -178,6 +178,11 @@ class StorageClient:
                     f"Request failed after {self.config.max_retries} retries: {e}"
                 )
 
+            except StorageClientError:
+                # Already mapped by _handle_response (ItemNotFoundError, ValidationError,
+                # APIError); keep the specific type and the server's message.
+                raise
+
             except Exception as e:
                 raise StorageClientError(f"Request failed: {e}")
 
