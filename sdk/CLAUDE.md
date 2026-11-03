@@ -110,7 +110,7 @@ Streaming is not supported: a truthy `stream` raises `LLMClientError` before any
 
 ### Tests
 - `test_*.py` files at the top level of `tests/` are unit tests.
-- `test_integration.py` requires a `.env` with valid `DEEPLYNX_KEY`/`SECRET`/`ORG_ID`/`PROJECT_ID` and optionally `DEEPLYNX_DATA_SOURCE_ID` (without it, code that creates records will hit "DataSource with id 0 not found").
+- `test_integration.py` requires a `.env` with valid `DEEPLYNX_KEY`/`SECRET`/`ORG_ID`/`PROJECT_ID` and optionally `DEEPLYNX_DATA_SOURCE_ID` (without it, code that creates records will hit "DataSource with id 0 not found"). CI runs it as the `sdk: integration` job against a throwaway DeepLynx started from `platform/docker-compose.deeplynx.yml` (`make deeplynx-setup` creates the project and API key); that job fails if any integration test is skipped.
 - `make test-install` builds a wheel, installs it into a clean venv, and imports every package under `prometheus_api/` from it (`python -I`, so the source tree can't stand in). It fails if a package is missing from `[tool.setuptools] packages`. CI runs it as the `sdk: install` job. Use this rather than ad-hoc shell scripts.
 
 ### Specs (spec-driven development)

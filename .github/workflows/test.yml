@@ -404,6 +404,78 @@ jobs:
         # Builds the wheel and imports every package from a clean venv
         run: make test-install
 
+  sdk-integration:
+    # The sdk's live tests (tests/test_integration.py) against a throwaway
+    # DeepLynx from its published images. Only the DeepLynx services start,
+    # from the platform's compose files: make deeplynx-setup creates a project
+    # and an API key for them in platform/.env, which this job copies to sdk/.env
+    name: "sdk: integration"
+    needs: [gitleaks, platform-compose]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    env:
+      LOCAL_DEEPLYNX: "true"
+      # make deeplynx-setup runs init_env.py, which wants an LLM profile and its
+      # key, and docker-compose.yml requires LLM_CONFIG_PROFILE. Nothing calls
+      # an LLM, so a placeholder is enough
+      LLM_CONFIG_PROFILE: anthropic
+      LLM_API_KEY: sk-ant-test-not-real
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.11.25"
+          python-version: "3.12"
+      - name: Start DeepLynx
+        # Waits for DeepLynx to be healthy, then saves a project and an API key
+        # in platform/.env. The server runs with authentication disabled, so
+        # none of this needs credentials
+        working-directory: platform
+        run: make deeplynx-setup
+      - name: Write the sdk's .env
+        # platform/.env points DEEPLYNX_BASE_URL at deeplynx-server on the
+        # compose network, which the host can't reach, so use the published port
+        run: |
+          grep -E '^DEEPLYNX_(KEY|SECRET|ORG_ID|PROJECT_ID)=' platform/.env > sdk/.env
+          echo 'DEEPLYNX_BASE_URL=http://localhost:5000/api/v1' >> sdk/.env
+      - name: Sync environment
+        working-directory: sdk
+        run: uv sync --frozen
+      - name: Integration tests
+        # The tests skip themselves without a .env or when an endpoint is
+        # missing, which would leave this job green having run nothing against
+        # DeepLynx, so a skip fails it
+        working-directory: sdk
+        run: |
+          status=0
+          uv run --frozen pytest -m integration -rs > "$RUNNER_TEMP/integration.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/integration.log"
+          [ "$status" -eq 0 ] || exit "$status"
+          if grep -q '^SKIPPED' "$RUNNER_TEMP/integration.log"; then
+            echo "::error::An integration test was skipped, so it did not run against DeepLynx"
+            exit 1
+          fi
+      - name: Show status
+        if: ${{ failure() }}
+        run: docker ps --all
+      - name: Collect logs
+        if: ${{ failure() }}
+        working-directory: platform
+        env:
+          COMPOSE_PROJECT_NAME: prometheus_platform
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.deeplynx.yml logs --no-color --timestamps --tail 300 deeplynx-server deeplynx-postgres
+      - name: Stop
+        if: ${{ always() }}
+        working-directory: platform
+        env:
+          COMPOSE_PROJECT_NAME: prometheus_platform
+        run: docker compose -f docker-compose.yml -f docker-compose.deeplynx.yml down -v
+
   agent-template:
     name: "agent-template: python ${{ matrix.python }}"
     needs: gitleaks
