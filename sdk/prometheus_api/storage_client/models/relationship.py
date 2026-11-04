@@ -36,7 +36,28 @@ class RelationshipBase(BaseModel):
 class RelationshipCreate(RelationshipBase):
     """Model for creating a new relationship."""
 
-    pass
+    def to_generated(
+        self, *, relationship_name: Optional[str] = None, relationship_id: Optional[int] = None
+    ) -> Any:
+        """Build a generated ``CreateEdgeRequestDto``.
+
+        The relationship type is sent by name (single create; the server resolves it) or by ID
+        (bulk create, which does not resolve names). Without either, the edge has no type.
+        """
+        from ..nexus_client import ensure_nexus_client
+
+        models = ensure_nexus_client().models
+        optional: Dict[str, Any] = {}
+        if relationship_name:
+            optional["relationship_name"] = relationship_name
+        if relationship_id is not None:
+            optional["relationship_id"] = relationship_id
+        return models.CreateEdgeRequestDto(
+            origin_id=self.from_item_id,
+            destination_id=self.to_item_id,
+            properties=models.JsonObject.from_dict(self.properties),
+            **optional,
+        )
 
 
 class Relationship(RelationshipBase):

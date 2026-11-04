@@ -22,6 +22,7 @@ import pytest
 from prometheus_api.storage_client.async_resources.relationships import (
     AsyncRelationshipsResource,
 )
+from prometheus_api.storage_client.exceptions import APIError, ValidationError
 from prometheus_api.storage_client.models.relationship import (
     Relationship,
     RelationshipCreate,
@@ -29,7 +30,7 @@ from prometheus_api.storage_client.models.relationship import (
 from prometheus_api.storage_client.resources.relationships import RelationshipsResource
 
 
-# get/delete/list go through the generated Nexus client; create still uses the old transport
+# Everything but the model tests goes through the generated Nexus client
 NEXUS_CLIENT = pytest.mark.requires_nexus_client
 
 
@@ -107,6 +108,7 @@ def test_relationship_create_still_requires_dict_properties():
         RelationshipCreate(from_item_id=1, to_item_id=2, relationship_type="t", properties="{}")
 
 
+@NEXUS_CLIENT
 async def test_create_parses_string_properties_in_sync_and_async():
     """Covers REQ-003-14: create must not fail on a stringified ``properties`` field."""
     request = RelationshipCreate(from_item_id=58, to_item_id=59, relationship_type="probe")
@@ -131,21 +133,6 @@ async def test_get_parses_wrapped_and_string_properties_in_sync_and_async():
 
     assert sync.model_dump() == asynchronous.model_dump()
     assert sync.properties == {}
-
-
-async def test_bulk_create_parses_string_properties_in_sync_and_async():
-    """Covers REQ-003-14 for the bulk endpoint."""
-    payload = [edge_payload(id=1), edge_payload(id=2, properties=None)]
-    requests = [
-        RelationshipCreate(from_item_id=58, to_item_id=59, relationship_type="a"),
-        RelationshipCreate(from_item_id=59, to_item_id=58, relationship_type="b"),
-    ]
-
-    sync = RelationshipsResource(SyncClient(payload)).bulk_create(requests)
-    asynchronous = await AsyncRelationshipsResource(AsyncClient(payload)).bulk_create(requests)
-
-    assert [r.model_dump() for r in sync] == [r.model_dump() for r in asynchronous]
-    assert [r.properties for r in sync] == [{"strength": "strong"}, {}]
 
 
 @NEXUS_CLIENT
@@ -218,3 +205,214 @@ def test_get_without_node_ids_raises_value_error():
 
     with pytest.raises(ValueError, match="missing required node ID"):
         RelationshipsResource(client).get(11)
+
+
+class RoutedClient(SyncClient):
+    """Answers by route, as the server does, and can fail an edge create like the server."""
+
+    def __init__(self, relationships=None, fail_edges=0):
+        super().__init__(None)
+        self.relationships = list(relationships or [])
+        self.fail_edges = fail_edges
+        self.next_id = 100
+
+    def _answer(self, method, path, kwargs):
+        self.calls.append((method, path, kwargs))
+        if path.endswith("/relationships") and method == "GET":
+            return Response(self.relationships)
+        if path.endswith("/relationships") and method == "POST":
+            self.next_id += 1
+            created = {"id": self.next_id, "name": kwargs["json"]["name"]}
+            self.relationships.append(created)
+            return Response(created)
+        if path.endswith("/edges/bulk"):
+            return Response(
+                [
+                    edge_payload(id=i + 1, relationshipId=b.get("relationship_id"))
+                    for i, b in enumerate(kwargs["json"])
+                ]
+            )
+        if path.endswith("/edges"):
+            if self.fail_edges:
+                self.fail_edges -= 1
+                name = kwargs["json"]["relationship_name"]
+                raise APIError(
+                    f"Relationship with name '{name}' not found in organization 1", status_code=500
+                )
+            rid = next(
+                (
+                    r["id"]
+                    for r in self.relationships
+                    if r["name"].lower() == kwargs["json"]["relationship_name"].lower()
+                ),
+                None,
+            )
+            return Response(edge_payload(relationshipId=rid))
+        raise AssertionError(f"unexpected request {method} {path}")
+
+    def _request(self, method, path, **kwargs):
+        return self._answer(method, path, kwargs)
+
+
+class AsyncRoutedClient(RoutedClient):
+    async def _get_data_source_id(self):
+        return 7
+
+    async def _request(self, method, path, **kwargs):
+        return self._answer(method, path, kwargs)
+
+
+def edge_calls(client):
+    return [c for c in client.calls if c[1].endswith("/edges")]
+
+
+def type_posts(client):
+    return [c for c in client.calls if c[1].endswith("/relationships") and c[0] == "POST"]
+
+
+LINK = RelationshipCreate(from_item_id=58, to_item_id=59, relationship_type="depends_on")
+
+
+@NEXUS_CLIENT
+async def test_create_sends_the_type_by_name_without_extra_requests_in_sync_and_async():
+    """Covers REQ-003-07: a known type costs one request and its name reaches the server."""
+    known = [{"id": 5, "name": "depends_on"}]
+    sync_client, async_client = RoutedClient(known), AsyncRoutedClient(known)
+
+    sync = RelationshipsResource(sync_client).create(LINK)
+    asynchronous = await AsyncRelationshipsResource(async_client).create(LINK)
+
+    assert sync.model_dump() == asynchronous.model_dump()
+    assert [c[:2] for c in sync_client.calls] == [("POST", "/organizations/1/projects/2/edges")]
+    kwargs = sync_client.calls[0][2]
+    assert kwargs["json"]["relationship_name"] == "depends_on"
+    assert kwargs["json"]["origin_id"] == 58 and kwargs["json"]["destination_id"] == 59
+    assert kwargs["params"] == {"dataSourceId": 7}
+    assert sync.relationship_type == "depends_on" and sync.relationship_pair_id == 5
+
+
+@NEXUS_CLIENT
+async def test_create_makes_a_missing_type_and_retries_once_in_sync_and_async():
+    """Covers REQ-003-15: an unknown type is created at organization level, then the edge retried."""
+    sync_client, async_client = RoutedClient(fail_edges=1), AsyncRoutedClient(fail_edges=1)
+
+    sync = RelationshipsResource(sync_client).create(LINK)
+    asynchronous = await AsyncRelationshipsResource(async_client).create(LINK)
+
+    assert sync.model_dump() == asynchronous.model_dump()
+    assert [(c[0], c[1]) for c in sync_client.calls] == [
+        ("POST", "/organizations/1/projects/2/edges"),
+        ("GET", "/organizations/1/relationships"),
+        ("POST", "/organizations/1/relationships"),
+        ("POST", "/organizations/1/projects/2/edges"),
+    ]
+    assert sync_client.calls == async_client.calls
+    assert type_posts(sync_client)[0][2]["json"] == {"name": "depends_on"}
+    assert sync.relationship_type == "depends_on" and sync.relationship_pair_id == 101
+
+
+@NEXUS_CLIENT
+async def test_create_reuses_a_type_that_appeared_under_another_case():
+    """Covers REQ-003-15: a case-insensitive match is reused, not created a second time."""
+    existing = [{"id": 9, "name": "Depends_On"}]
+    sync_client = RoutedClient(existing, fail_edges=1)
+
+    result = RelationshipsResource(sync_client).create(LINK)
+
+    assert type_posts(sync_client) == []
+    assert result.relationship_pair_id == 9
+
+
+@NEXUS_CLIENT
+async def test_create_without_auto_creation_raises_a_validation_error_in_sync_and_async():
+    """Covers REQ-003-15: with the option off, the unknown type is reported, not hidden in a 500."""
+    sync_client, async_client = RoutedClient(fail_edges=1), AsyncRoutedClient(fail_edges=1)
+
+    with pytest.raises(ValidationError, match="depends_on"):
+        RelationshipsResource(sync_client).create(LINK, create_type_if_missing=False)
+    with pytest.raises(ValidationError, match="depends_on"):
+        await AsyncRelationshipsResource(async_client).create(LINK, create_type_if_missing=False)
+
+    assert type_posts(sync_client) == []
+    assert len(edge_calls(sync_client)) == 1
+
+
+@NEXUS_CLIENT
+async def test_create_does_not_retry_other_failures():
+    """Covers REQ-003-15: only the missing-type failure triggers a lookup and a retry."""
+
+    class Failing(RoutedClient):
+        def _request(self, method, path, **kwargs):
+            self.calls.append((method, path, kwargs))
+            raise APIError("database unavailable", status_code=500)
+
+    client = Failing()
+
+    with pytest.raises(APIError, match="database unavailable"):
+        RelationshipsResource(client).create(LINK)
+
+    assert len(client.calls) == 1
+
+
+@NEXUS_CLIENT
+async def test_create_gives_up_after_one_retry():
+    """Covers REQ-003-15: if the retry still reports the type missing, that error is raised."""
+    client = RoutedClient(fail_edges=2)
+
+    with pytest.raises(APIError, match="not found"):
+        RelationshipsResource(client).create(LINK)
+
+    assert len(edge_calls(client)) == 2
+
+
+@NEXUS_CLIENT
+async def test_bulk_create_sends_type_ids_and_creates_each_missing_type_once():
+    """Covers REQ-003-15: bulk resolves types up front; the bulk route only understands IDs."""
+    requests = [
+        RelationshipCreate(from_item_id=1, to_item_id=2, relationship_type="links"),
+        RelationshipCreate(from_item_id=2, to_item_id=3, relationship_type="LINKS"),
+        RelationshipCreate(from_item_id=3, to_item_id=4, relationship_type="owns"),
+    ]
+    existing = [{"id": 7, "name": "owns"}]
+    sync_client, async_client = RoutedClient(existing), AsyncRoutedClient(existing)
+
+    sync = RelationshipsResource(sync_client).bulk_create(requests)
+    asynchronous = await AsyncRelationshipsResource(async_client).bulk_create(requests)
+
+    assert [r.model_dump() for r in sync] == [r.model_dump() for r in asynchronous]
+    assert [c[1] for c in type_posts(sync_client)] == ["/organizations/1/relationships"]
+    assert [c[2]["json"] for c in type_posts(sync_client)] == [{"name": "links"}]
+    bulk = [c for c in sync_client.calls if c[1].endswith("/edges/bulk")]
+    assert [e["relationship_id"] for e in bulk[0][2]["json"]] == [101, 101, 7]
+    assert "relationship_name" not in bulk[0][2]["json"][0]
+    assert [r.relationship_type for r in sync] == ["links", "links", "owns"]
+    assert sync[0].properties == {"strength": "strong"}
+
+
+@NEXUS_CLIENT
+async def test_bulk_create_without_auto_creation_raises_before_sending():
+    """Covers REQ-003-15: a missing type stops the batch before any edge is created."""
+    client = RoutedClient([{"id": 7, "name": "owns"}])
+    requests = [
+        RelationshipCreate(from_item_id=1, to_item_id=2, relationship_type="owns"),
+        RelationshipCreate(from_item_id=2, to_item_id=3, relationship_type="links"),
+    ]
+
+    with pytest.raises(ValidationError, match="links"):
+        RelationshipsResource(client).bulk_create(requests, create_type_if_missing=False)
+
+    assert [c for c in client.calls if c[1].endswith("/edges/bulk")] == []
+    assert type_posts(client) == []
+
+
+@NEXUS_CLIENT
+def test_bulk_create_with_no_types_skips_the_type_lookup():
+    """Covers REQ-003-15: blank types need no relationship list request."""
+    client = RoutedClient()
+    blank = RelationshipCreate(from_item_id=1, to_item_id=2, relationship_type="")
+
+    result = RelationshipsResource(client).bulk_create([blank])
+
+    assert [c[1] for c in client.calls] == ["/organizations/1/projects/2/edges/bulk"]
+    assert "relationship_id" not in client.calls[0][2]["json"][0]
+    assert result[0].relationship_type == ""

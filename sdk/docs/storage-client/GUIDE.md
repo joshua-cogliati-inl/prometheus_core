@@ -259,7 +259,14 @@ rel = client.relationships.create(RelationshipCreate(
     properties={"strength": "high"}
 ))
 
-# Get a relationship
+# The relationship type is created in the organization if it does not exist yet.
+# Pass create_type_if_missing=False to raise a ValidationError instead.
+rel = client.relationships.create(
+    RelationshipCreate(from_item_id=1, to_item_id=2, relationship_type="new_type"),
+    create_type_if_missing=False,
+)
+
+# Get a relationship (its relationship_type is empty: the API returns only the type ID)
 rel = client.relationships.get(relationship_id=123)
 
 # Delete a relationship

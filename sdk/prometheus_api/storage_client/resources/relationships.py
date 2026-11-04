@@ -16,6 +16,12 @@ import json
 from typing import Any, Dict, List, Optional
 from ..models.item import value_of
 from ..models.relationship import Relationship, RelationshipCreate
+from ..relationship_types import (
+    distinct_type_names,
+    is_missing_type_error,
+    missing_type_error,
+    type_ids_by_name,
+)
 from ..exceptions import StorageClientError
 from ..nexus_client import ensure_nexus_client, generated_client, operation
 from .base import BaseResource
@@ -53,14 +59,24 @@ class RelationshipsResource(BaseResource):
             )
         return Relationship.from_generated(parsed)
 
-    def create(self, relationship: RelationshipCreate) -> Relationship:
+    def create(
+        self, relationship: RelationshipCreate, create_type_if_missing: bool = True
+    ) -> Relationship:
         """Create a new relationship between two items.
+
+        The relationship type is sent by name. Nexus resolves the name among the organization's
+        relationships and fails when there is none; with ``create_type_if_missing`` the type is
+        then created at organization level and the request is retried once.
 
         Args:
             relationship: Relationship creation data
+            create_type_if_missing: Create an unknown ``relationship_type`` instead of failing
 
         Returns:
-            Created relationship with ID and timestamps
+            Created relationship. ``relationship_type`` echoes the requested type.
+
+        Raises:
+            ValidationError: If the type does not exist and ``create_type_if_missing`` is False
 
         Example:
             ```python
@@ -72,26 +88,61 @@ class RelationshipsResource(BaseResource):
             ))
             ```
         """
-        payload = {
-            "origin_id": relationship.from_item_id,
-            "destination_id": relationship.to_item_id,
-            "name": relationship.relationship_type,  # API expects 'name' field
-            "properties": relationship.properties,
-        }
+        name = (relationship.relationship_type or "").strip() or None
+        try:
+            return self._create_edge(relationship, name)
+        except StorageClientError as error:
+            if not name or not is_missing_type_error(error, name):
+                raise
+            if not create_type_if_missing:
+                raise missing_type_error([name]) from error
+        self._resolve_type_ids([name], create_missing=True)
+        return self._create_edge(relationship, name)
 
-        params: Dict[str, Any] = {"dataSourceId": self._client._get_data_source_id()}
-
-        response = self._client._request(
-            "POST", f"{self._base_path}/edges", json=payload, params=params
+    def _create_edge(self, relationship: RelationshipCreate, name: Optional[str]) -> Relationship:
+        organization_id, project_id = self._scope()
+        response = operation("edge", "api_create_an_edge").sync_detailed(
+            organization_id,
+            project_id,
+            client=self._generated(),
+            body=relationship.to_generated(relationship_name=name),
+            data_source_id=self._client._get_data_source_id(),
         )
+        edge = self._edge(response, "create relationship")
+        if name and edge.relationship_pair_id is not None:
+            return edge.model_copy(update={"relationship_type": name})
+        return edge
 
-        data = response.json()
-
-        # Some DeepLynx endpoints wrap response in 'value' field
-        if isinstance(data, dict) and "value" in data:
-            data = data["value"]
-
-        return self._parse_relationship(data)
+    def _resolve_type_ids(self, names: List[str], create_missing: bool) -> Dict[str, int]:
+        """IDs of the named relationship types (keys lower-cased), creating missing ones."""
+        organization_id, _ = self._scope()
+        listed = operation(
+            "organization_relationship", "api_get_all_relationships_organization"
+        ).sync_detailed(organization_id, client=self._generated())
+        if not isinstance(listed.parsed, list):
+            raise StorageClientError(
+                f"Unexpected response to list relationship types (HTTP {int(listed.status_code)})"
+            )
+        ids = type_ids_by_name(listed.parsed)
+        missing = [name for name in names if name.lower() not in ids]
+        if missing and not create_missing:
+            raise missing_type_error(missing)
+        models = ensure_nexus_client().models
+        for name in missing:
+            created = operation(
+                "organization_relationship", "api_create_a_relationship_organization"
+            ).sync_detailed(
+                organization_id,
+                client=self._generated(),
+                body=models.CreateRelationshipRequestDto(name=name),
+            )
+            if created.parsed is None or not hasattr(created.parsed, "id"):
+                raise StorageClientError(
+                    f"Unexpected response to create relationship type '{name}' "
+                    f"(HTTP {int(created.status_code)})"
+                )
+            ids[name.lower()] = int(created.parsed.id)
+        return ids
 
     def get(self, relationship_id: int) -> Relationship:
         """Get a relationship by ID.
@@ -116,14 +167,23 @@ class RelationshipsResource(BaseResource):
             organization_id, project_id, relationship_id, client=self._generated()
         )
 
-    def bulk_create(self, relationships: List[RelationshipCreate]) -> List[Relationship]:
+    def bulk_create(
+        self, relationships: List[RelationshipCreate], create_type_if_missing: bool = True
+    ) -> List[Relationship]:
         """Create multiple relationships in a single request.
+
+        The bulk route accepts relationship IDs, not names, so the distinct types are resolved
+        first (one list request) and missing ones are created when ``create_type_if_missing``.
 
         Args:
             relationships: List of relationships to create
+            create_type_if_missing: Create unknown ``relationship_type`` values instead of failing
 
         Returns:
-            List of created relationships
+            List of created relationships, with ``relationship_type`` echoing the requested type
+
+        Raises:
+            ValidationError: If a type does not exist and ``create_type_if_missing`` is False
 
         Example:
             ```python
@@ -133,31 +193,31 @@ class RelationshipsResource(BaseResource):
             ])
             ```
         """
-        payload = [
-            {
-                "origin_id": rel.from_item_id,
-                "destination_id": rel.to_item_id,
-                "name": rel.relationship_type,  # API expects 'name' field
-                "properties": rel.properties,
-            }
-            for rel in relationships
-        ]
-
-        params = {"dataSourceId": self._client._get_data_source_id()}
-
-        response = self._client._request(
-            "POST", f"{self._base_path}/edges/bulk", json=payload, params=params
+        names = distinct_type_names((r.relationship_type or "").strip() for r in relationships)
+        ids = self._resolve_type_ids(names, create_type_if_missing) if names else {}
+        organization_id, project_id = self._scope()
+        response = operation("edge", "api_create_many_edges").sync_detailed(
+            organization_id,
+            project_id,
+            client=self._generated(),
+            body=[
+                r.to_generated(relationship_id=ids.get((r.relationship_type or "").strip().lower()))
+                for r in relationships
+            ],
+            data_source_id=self._client._get_data_source_id(),
         )
-
-        data = response.json()
-
-        # API may return edges directly as a list or wrapped in a dict
-        if isinstance(data, list):
-            edges = data
-        else:
-            edges = data.get("edges", [])
-
-        return [self._parse_relationship(rel_data) for rel_data in edges]
+        if not isinstance(response.parsed, list):
+            raise StorageClientError(
+                f"Unexpected response to bulk create (HTTP {int(response.status_code)})"
+            )
+        names_by_id = {ids[name.lower()]: name for name in names}
+        created = [Relationship.from_generated(edge) for edge in response.parsed]
+        return [
+            edge.model_copy(update={"relationship_type": names_by_id[edge.relationship_pair_id]})
+            if edge.relationship_pair_id in names_by_id
+            else edge
+            for edge in created
+        ]
 
     def get_item_relationships(
         self, item_id: int, direction: Optional[str] = None
@@ -226,50 +286,3 @@ class RelationshipsResource(BaseResource):
 
         data = response.json()
         return data if isinstance(data, dict) else {"result": data}
-
-    def _parse_relationship(self, data: Dict[str, Any]) -> Relationship:
-        """Parse API response data into a Relationship model.
-
-        Args:
-            data: Raw API response data
-
-        Returns:
-            Parsed Relationship object
-
-        Note:
-            created_at and updated_at are optional as some DeepLynx
-            deployments may not return these fields.
-
-        Raises:
-            ValueError: If required fields are missing from API response
-        """
-        # DeepLynx API returns camelCase field names per API docs
-        from_item_id = data.get("originId")
-        to_item_id = data.get("destinationId")
-
-        # Validate required fields
-        if from_item_id is None or to_item_id is None:
-            import json
-            import logging
-
-            logger = logging.getLogger(__name__)
-            logger.error(
-                f"Failed to parse relationship - missing node IDs. Response data: {json.dumps(data, indent=2)}"
-            )
-            raise ValueError(
-                f"API response missing required node ID fields. "
-                f"Response keys: {list(data.keys())}. "
-                f"Expected 'originId' and 'destinationId'."
-            )
-
-        return Relationship(
-            id=data["id"],
-            from_item_id=from_item_id,
-            to_item_id=to_item_id,
-            relationship_type=data.get("name", ""),
-            properties=data.get("properties", {}),
-            created_at=data.get("createdAt"),
-            updated_at=data.get("lastUpdatedAt"),
-            relationship_pair_id=data.get("relationshipId"),
-            data_source_id=data.get("dataSourceId"),
-        )
