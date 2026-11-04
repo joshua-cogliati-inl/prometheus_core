@@ -53,16 +53,16 @@ class ItemCreate(ItemBase):
 
         Nexus rejects an empty description, so the name is used when none is given.
         """
-        from ..nexus_client import ensure_nexus_client
+        from ..nexus_client import models
 
-        models = ensure_nexus_client().models
+        generated = models()
         optional: Dict[str, Any] = {}
         if self.class_id:
             optional["class_id"] = self.class_id
-        return models.CreateRecordRequestDto(
+        return generated.CreateRecordRequestDto(
             name=self.name,
             description=self.description or self.name,
-            properties=models.JsonObject.from_dict(self.properties),
+            properties=generated.JsonObject.from_dict(self.properties),
             original_id=original_id,
             **optional,
         )
@@ -81,21 +81,21 @@ class ItemUpdate(BaseModel):
 
     def to_generated(self) -> Any:
         """Build a generated ``UpdateRecordRequestDto`` holding only the provided fields."""
-        from ..nexus_client import ensure_nexus_client
+        from ..nexus_client import models
 
-        models = ensure_nexus_client().models
+        generated = models()
         fields: Dict[str, Any] = {}
         if self.name is not None:
             fields["name"] = self.name
         if self.description is not None:
             fields["description"] = self.description
         if self.properties is not None:
-            fields["properties"] = models.JsonObject.from_dict(self.properties)
+            fields["properties"] = generated.JsonObject.from_dict(self.properties)
         if self.class_id is not None:
             fields["class_id"] = self.class_id
         if self.original_id is not None:
             fields["original_id"] = self.original_id
-        return models.UpdateRecordRequestDto(**fields)
+        return generated.UpdateRecordRequestDto(**fields)
 
 
 class Item(ItemBase):

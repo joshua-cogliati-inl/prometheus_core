@@ -16,7 +16,7 @@ from typing import List
 
 from ..models.tag import TagModel
 from ..exceptions import StorageClientError
-from ..nexus_client import ensure_nexus_client, generated_client, operation
+from ..nexus_client import generated_client, models, operation
 from .base import BaseResource
 
 
@@ -44,7 +44,7 @@ class TagsResource(BaseResource):
             raise ValueError("Tag name must be non-empty")
 
         generated = operation("project_tag", "api_create_a_tag_project")
-        body = ensure_nexus_client().models.CreateTagRequestDto(name=normalized)
+        body = models().CreateTagRequestDto(name=normalized)
         response = generated.sync_detailed(
             self._client.config.project_id, client=self._generated(), body=body
         )

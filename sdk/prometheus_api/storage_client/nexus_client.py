@@ -72,6 +72,12 @@ def ensure_nexus_client() -> ModuleType:
             ) from error
 
 
+def models() -> ModuleType:
+    """Return the generated ``models`` subpackage (importing it, as the package does not)."""
+    ensure_nexus_client()
+    return importlib.import_module(f"{PACKAGE}.models")
+
+
 def operation(group: str, name: str) -> ModuleType:
     """Return the generated operation module ``api/<group>/<name>``."""
     ensure_nexus_client()

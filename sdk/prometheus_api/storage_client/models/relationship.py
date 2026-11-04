@@ -44,18 +44,18 @@ class RelationshipCreate(RelationshipBase):
         The relationship type is sent by name (single create; the server resolves it) or by ID
         (bulk create, which does not resolve names). Without either, the edge has no type.
         """
-        from ..nexus_client import ensure_nexus_client
+        from ..nexus_client import models
 
-        models = ensure_nexus_client().models
+        generated = models()
         optional: Dict[str, Any] = {}
         if relationship_name:
             optional["relationship_name"] = relationship_name
         if relationship_id is not None:
             optional["relationship_id"] = relationship_id
-        return models.CreateEdgeRequestDto(
+        return generated.CreateEdgeRequestDto(
             origin_id=self.from_item_id,
             destination_id=self.to_item_id,
-            properties=models.JsonObject.from_dict(self.properties),
+            properties=generated.JsonObject.from_dict(self.properties),
             **optional,
         )
 

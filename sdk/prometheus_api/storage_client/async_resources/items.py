@@ -18,7 +18,7 @@ from importlib.metadata import version as pkg_version
 from ..models.item import Item, ItemCreate, ItemUpdate
 from ..models.pagination import Page, PageInfo
 from ..exceptions import StorageClientError
-from ..nexus_client import ensure_nexus_client, generated_client, operation
+from ..nexus_client import generated_client, models, operation
 from .base import AsyncBaseResource
 
 logger = logging.getLogger(__name__)
@@ -204,4 +204,4 @@ class AsyncItemsResource(AsyncBaseResource):
         list is dropped first and treated as empty.
         """
         record = {k: v for k, v in data.items() if not (k in ("tags", "labels") and v is None)}
-        return Item.from_generated(ensure_nexus_client().models.RecordResponseDto.from_dict(record))
+        return Item.from_generated(models().RecordResponseDto.from_dict(record))

@@ -163,3 +163,24 @@ async def test_generated_async_operation_is_sent_through_the_owners_request():
 
     assert owner.calls[0][:2] == ("GET", "/projects/5/tags")
     assert result.parsed[0].id == 3
+
+
+@pytest.mark.requires_nexus_client
+def test_models_accessor_works_in_a_fresh_interpreter():
+    """Covers REQ-001-13: ``models()`` must not rely on an operation having imported the models.
+
+    The generated package does not import its ``models`` subpackage itself; inside this test
+    process some other test usually has, so the check needs a clean interpreter.
+    """
+    import subprocess
+
+    code = (
+        "from prometheus_api.storage_client.nexus_client import models;"
+        "print(models().RecordResponseDto.__name__)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=60
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "RecordResponseDto"

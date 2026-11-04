@@ -15,7 +15,7 @@
 from typing import Any, Dict, List, Optional
 from ..models.item import Item
 from ..models.pagination import Page, PageInfo
-from ..nexus_client import ensure_nexus_client
+from ..nexus_client import models
 from .base import BaseResource
 
 
@@ -254,6 +254,4 @@ class SearchResource(BaseResource):
         Search results carry ``properties`` and ``tags`` as JSON strings; ``Item.from_generated``
         decodes both.
         """
-        return Item.from_generated(
-            ensure_nexus_client().models.QueryRecordViewResponseDto.from_dict(data)
-        )
+        return Item.from_generated(models().QueryRecordViewResponseDto.from_dict(data))

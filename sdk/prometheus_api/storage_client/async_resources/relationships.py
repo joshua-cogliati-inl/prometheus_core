@@ -23,7 +23,7 @@ from ..relationship_types import (
     type_ids_by_name,
 )
 from ..exceptions import StorageClientError
-from ..nexus_client import ensure_nexus_client, generated_client, operation
+from ..nexus_client import generated_client, models, operation
 from .base import AsyncBaseResource
 
 
@@ -51,7 +51,7 @@ class AsyncRelationshipsResource(AsyncBaseResource):
             except ValueError:
                 body = None
             if isinstance(body, dict) and isinstance(body.get("value"), dict):
-                dto = ensure_nexus_client().models.EdgeResponseDto.from_dict(body["value"])
+                dto = models().EdgeResponseDto.from_dict(body["value"])
                 return Relationship.from_generated(dto)
         if parsed is None or not hasattr(parsed, "id"):
             raise StorageClientError(
@@ -129,14 +129,14 @@ class AsyncRelationshipsResource(AsyncBaseResource):
         missing = [name for name in names if name.lower() not in ids]
         if missing and not create_missing:
             raise missing_type_error(missing)
-        models = ensure_nexus_client().models
+        generated = models()
         for name in missing:
             created = await operation(
                 "organization_relationship", "api_create_a_relationship_organization"
             ).asyncio_detailed(
                 organization_id,
                 client=self._generated(),
-                body=models.CreateRelationshipRequestDto(name=name),
+                body=generated.CreateRelationshipRequestDto(name=name),
             )
             if created.parsed is None or not hasattr(created.parsed, "id"):
                 raise StorageClientError(
