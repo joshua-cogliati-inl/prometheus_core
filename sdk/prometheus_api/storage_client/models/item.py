@@ -135,10 +135,7 @@ class Item(ItemBase):
         timestamp = value_of(dto, "last_updated_at") or datetime.now()
         class_id = value_of(dto, "class_id")
         data_source_id = value_of(dto, "data_source_id")
-        tags = [
-            Tag(id=value_of(t, "id"), name=value_of(t, "name") or "")
-            for t in (value_of(dto, "tags") or [])
-        ]
+        tags = _tags_from_generated(value_of(dto, "tags"))
         return cls(
             id=int(dto.id),
             name=value_of(dto, "name") or "",
@@ -153,6 +150,24 @@ class Item(ItemBase):
             metatype_name=(getattr(dto, "additional_properties", None) or {}).get("className"),
             data_source_id=None if data_source_id is None else int(data_source_id),
         )
+
+
+def _tags_from_generated(raw: Any) -> List[Tag]:
+    """Tags from a generated DTO: a list of tag DTOs (record) or a JSON string (query view)."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return []
+    if not isinstance(raw, list):
+        return []
+    tags = []
+    for entry in raw:
+        if isinstance(entry, dict):
+            tags.append(Tag(id=entry.get("id"), name=entry.get("name") or ""))
+        else:
+            tags.append(Tag(id=value_of(entry, "id"), name=value_of(entry, "name") or ""))
+    return tags
 
 
 def value_of(obj: Any, name: str) -> Any:

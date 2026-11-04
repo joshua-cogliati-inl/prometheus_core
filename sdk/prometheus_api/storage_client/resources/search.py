@@ -15,6 +15,7 @@
 from typing import Any, Dict, List, Optional
 from ..models.item import Item
 from ..models.pagination import Page, PageInfo
+from ..nexus_client import ensure_nexus_client
 from .base import BaseResource
 
 
@@ -248,63 +249,11 @@ class SearchResource(BaseResource):
         return Page(items=items, page_info=page_info)
 
     def _parse_item(self, data: Dict[str, Any]) -> Item:
-        """Parse item data from search results.
+        """Parse one search result through the generated ``QueryRecordViewResponseDto``.
 
-        Args:
-            data: Raw item data
-
-        Returns:
-            Parsed Item object
-
-        Note:
-            DeepLynx API returns camelCase field names.
+        Search results carry ``properties`` and ``tags`` as JSON strings; ``Item.from_generated``
+        decodes both.
         """
-        from ..models.item import Tag
-        from datetime import datetime
-        import json as json_lib
-
-        # Parse timestamp
-        timestamp_str = data.get("lastUpdatedAt")
-        if timestamp_str:
-            try:
-                timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            except ValueError:
-                timestamp = datetime.now()
-        else:
-            timestamp = datetime.now()
-
-        # Parse properties (API returns as JSON string)
-        properties = data.get("properties", {})
-        if isinstance(properties, str):
-            try:
-                properties = json_lib.loads(properties)
-            except (TypeError, ValueError):
-                properties = {}
-
-        # Parse tags (API returns as JSON string)
-        tags_data = data.get("tags")
-        tags = []
-        if tags_data:
-            if isinstance(tags_data, str):
-                try:
-                    tags_list = json_lib.loads(tags_data)
-                    tags = [Tag(id=t.get("id"), name=t.get("name", "")) for t in tags_list]
-                except (TypeError, ValueError):
-                    tags = []
-            elif isinstance(tags_data, list):
-                tags = [Tag(id=t.get("id"), name=t.get("name", "")) for t in tags_data]
-
-        return Item(
-            id=data["id"],
-            name=data.get("name", ""),
-            description=data.get("description"),
-            properties=properties,
-            class_id=data.get("classId"),
-            original_id=data.get("originalId"),
-            created_at=timestamp,
-            updated_at=timestamp,
-            tags=tags,
-            metatype_id=data.get("classId"),
-            metatype_name=data.get("className"),
-            data_source_id=data.get("dataSourceId"),
+        return Item.from_generated(
+            ensure_nexus_client().models.QueryRecordViewResponseDto.from_dict(data)
         )

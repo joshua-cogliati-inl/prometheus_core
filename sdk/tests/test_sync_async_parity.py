@@ -26,8 +26,8 @@ from prometheus_api.storage_client.resources.items import ItemsResource
 from prometheus_api.storage_client.resources.search import SearchResource
 
 
-# Item operations (get/create/update/delete/list/bulk_create) use the generated Nexus client
-ITEM_CLIENT = pytest.mark.requires_nexus_client
+# Item and search operations parse their responses with the generated Nexus client
+pytestmark = pytest.mark.requires_nexus_client
 
 
 class Response(httpx.Response):
@@ -78,7 +78,6 @@ def item_payload(**overrides):
     return payload
 
 
-@ITEM_CLIENT
 async def test_item_create_payloads_match_between_sync_and_async():
     sync_client = SyncClient(item_payload())
     async_client = AsyncClient(item_payload())
@@ -109,7 +108,6 @@ async def test_item_create_payloads_match_between_sync_and_async():
     assert kwargs["headers"] == {"Content-Type": "application/json"}
 
 
-@ITEM_CLIENT
 @pytest.mark.parametrize("description", [None, ""])
 async def test_item_create_defaults_missing_description_to_name(description):
     """Covers REQ-002-02: DeepLynx rejects an empty description, so default to the item name."""
@@ -126,7 +124,6 @@ async def test_item_create_defaults_missing_description_to_name(description):
     assert async_json["description"] == "Sample"
 
 
-@ITEM_CLIENT
 @pytest.mark.parametrize("description", [None, ""])
 async def test_item_bulk_create_defaults_missing_description_to_name(description):
     """Covers REQ-002-02 for the bulk endpoint, sync and async."""
@@ -161,7 +158,6 @@ def paginated_payload(items, **overrides):
     return payload
 
 
-@ITEM_CLIENT
 async def test_item_list_uses_paginated_route_and_server_paging_in_sync_and_async():
     """Covers REQ-002-05: list calls /records/paginated and trusts the server's paging."""
     payload = paginated_payload([item_payload(id=1), item_payload(id=2)])
@@ -183,7 +179,6 @@ async def test_item_list_uses_paginated_route_and_server_paging_in_sync_and_asyn
     assert sync_page.page_info.has_previous is False
 
 
-@ITEM_CLIENT
 async def test_item_list_passes_filters_through_in_sync_and_async():
     """Covers REQ-002-05: extra filters are sent alongside the paging parameters."""
     payload = paginated_payload([], totalCount=0, hasNext=False)
@@ -201,7 +196,6 @@ async def test_item_list_passes_filters_through_in_sync_and_async():
     }
 
 
-@ITEM_CLIENT
 @pytest.mark.parametrize("empty_items", [None, []])
 async def test_item_list_treats_null_or_empty_items_as_empty_page(empty_items):
     """Covers REQ-002-05: the server returns ``items: null`` for an empty result."""
@@ -215,7 +209,6 @@ async def test_item_list_treats_null_or_empty_items_as_empty_page(empty_items):
     assert sync_page.page_info.has_next is False
 
 
-@ITEM_CLIENT
 async def test_item_iter_all_follows_has_next_across_pages_in_sync_and_async():
     """Covers REQ-002-06: iteration stops when the server says there is no next page."""
     pages = {
@@ -367,7 +360,6 @@ async def test_search_recent_rejects_non_positive_limit_in_sync_and_async(limit)
     assert sync_client.calls == [] and async_client.calls == []
 
 
-@ITEM_CLIENT
 async def test_item_update_payloads_match_between_sync_and_async():
     sync_client = SyncClient(item_payload(name="Updated"))
     async_client = AsyncClient(item_payload(name="Updated"))
@@ -499,7 +491,6 @@ async def test_advanced_query_validation_matches_between_sync_and_async(page, pa
         await async_resource.advanced_query([], [2], page=page, page_size=page_size)
 
 
-@ITEM_CLIENT
 async def test_item_get_and_delete_use_record_routes_in_sync_and_async():
     """Covers REQ-002-17: get and delete address the record route through the generated client."""
     sync_client = SyncClient(item_payload())
@@ -517,7 +508,6 @@ async def test_item_get_and_delete_use_record_routes_in_sync_and_async():
     assert sync_client.calls[1][:2] == ("DELETE", "/organizations/1/projects/2/records/123")
 
 
-@ITEM_CLIENT
 @pytest.mark.parametrize(
     ("overrides", "expected"),
     [
@@ -534,7 +524,6 @@ def test_item_from_generated_decodes_json_string_properties(overrides, expected)
     assert ItemsResource(client).get(123).properties == expected
 
 
-@ITEM_CLIENT
 def test_item_from_generated_tolerates_missing_and_null_fields():
     """Covers REQ-002-16: absent fields and a null classId become None/defaults, not errors."""
     client = SyncClient({"id": 5, "classId": None})
@@ -547,7 +536,6 @@ def test_item_from_generated_tolerates_missing_and_null_fields():
     assert item.created_at == item.updated_at
 
 
-@ITEM_CLIENT
 def test_item_from_generated_keeps_class_name_and_tags():
     """Covers REQ-002-16: className (not a declared DTO field) and tags are preserved."""
     payload = item_payload(className="Sensor", tags=[{"id": 4, "name": "debug"}])
@@ -560,7 +548,6 @@ def test_item_from_generated_keeps_class_name_and_tags():
     assert [(t.id, t.name) for t in item.tags] == [(4, "debug")]
 
 
-@ITEM_CLIENT
 async def test_item_list_and_bulk_create_accept_null_tags_in_sync_and_async():
     """Covers REQ-002-16: a record whose ``tags`` is null parses as an item with no tags."""
     page = paginated_payload([item_payload(id=1, tags=None)], hasNext=False)
@@ -571,3 +558,23 @@ async def test_item_list_and_bulk_create_accept_null_tags_in_sync_and_async():
 
     assert sync_page.items[0].tags == [] and async_page.items[0].tags == []
     assert [item.id for item in created] == [2]
+
+
+@pytest.mark.parametrize(
+    ("tags", "expected"),
+    [
+        ('[{"id": 4, "name": "debug"}]', [(4, "debug")]),
+        ("not json", []),
+        (None, []),
+        ([{"id": 5, "name": "svg"}], [(5, "svg")]),
+    ],
+)
+async def test_search_results_decode_json_string_tags_in_sync_and_async(tags, expected):
+    """Covers REQ-002-16: search views send tags as a JSON string; bad values become no tags."""
+    payload = paginated_payload([item_payload(id=1, tags=tags)], hasNext=False)
+
+    sync_page = SearchResource(SyncClient(payload)).advanced_query([], [2])
+    async_page = await AsyncSearchResource(AsyncClient(payload)).advanced_query([], [2])
+
+    for page in (sync_page, async_page):
+        assert [(t.id, t.name) for t in page.items[0].tags] == expected
