@@ -1,7 +1,7 @@
 # 003 — Storage files, relationships, and timeseries
 
 status: implemented
-sources: docs/storage-client/GUIDE.md, prometheus_api/storage_client/models/file.py, prometheus_api/storage_client/models/relationship.py, prometheus_api/storage_client/models/timeseries.py, prometheus_api/storage_client/nexus_client.py, prometheus_api/storage_client/relationship_types.py, prometheus_api/storage_client/resources/files.py, prometheus_api/storage_client/resources/relationships.py, prometheus_api/storage_client/resources/timeseries.py, prometheus_api/storage_client/utils/streaming.py, prometheus_api/storage_client/async_resources/files.py, prometheus_api/storage_client/async_resources/relationships.py, prometheus_api/storage_client/async_resources/timeseries.py, tests/test_models.py, tests/test_relationships.py, tests/test_timeseries.py, tests/test_integration.py
+sources: docs/storage-client/GUIDE.md, prometheus_api/storage_client/models/file.py, prometheus_api/storage_client/models/relationship.py, prometheus_api/storage_client/models/timeseries.py, prometheus_api/storage_client/nexus_client.py, prometheus_api/storage_client/relationship_types.py, prometheus_api/storage_client/resources/files.py, prometheus_api/storage_client/resources/relationships.py, prometheus_api/storage_client/resources/timeseries.py, prometheus_api/storage_client/utils/streaming.py, prometheus_api/storage_client/async_resources/files.py, prometheus_api/storage_client/async_resources/relationships.py, prometheus_api/storage_client/async_resources/timeseries.py, tests/test_models.py, tests/test_files.py, tests/test_relationships.py, tests/test_timeseries.py, tests/test_integration.py
 depends-on: 001, 002
 
 ## Purpose
@@ -9,9 +9,9 @@ Support non-record storage workflows: binary files, large chunked uploads, relat
 
 ## Requirements
 - REQ-003-01: File upload MUST reject missing local paths, default the remote name to `Path.name`, include optional description, and return `FileMetadata`.
-- REQ-003-02: File metadata lookup MUST retrieve the backing record through `/records/{file_id}` and parse DeepLynx file fields into `FileMetadata`.
-- REQ-003-03: File download MUST request `/files/{file_id}`, create parent directories for the target path, and write response bytes to disk.
-- REQ-003-04: File delete MUST call `/files/{file_id}` and return `None` on success.
+- REQ-003-02: File metadata lookup MUST retrieve the backing record through `/records/{file_id}` (the generated `api_get_a_record` operation) and map it to `FileMetadata`: `fileType`, `fileSize`, `uri` and `lastUpdatedAt` fill `file_type`, `size`, `uri` and `updated_at`; `created_at` is `None` because a record carries no creation time. A response that is not a record MUST raise `StorageClientError`.
+- REQ-003-03: File download MUST request `/files/{file_id}` (the generated `api_download_file` operation), create parent directories for the target path, and write response bytes to disk.
+- REQ-003-04: File delete MUST call `/files/{file_id}` (the generated `api_delete_file` operation) and return `None` on success.
 - REQ-003-05: Chunked upload MUST start a session, send zero-based chunks, complete with `total_chunks`, and best-effort cancel the session if an intermediate step fails. ⚠ untested
 - REQ-003-06: Chunked upload MUST use a generated UUID when the start response omits an upload ID. ⚠ untested
 - REQ-003-07: Relationship create MUST map generic model fields to DeepLynx `origin_id`, `destination_id`, `relationship_name` (the type), `properties`, and include `dataSourceId`; bulk create MUST send `relationship_id` instead of a name, because the bulk route does not resolve names. Before this requirement was rewritten, the type was sent as `name`, which the server ignores, so created edges had no type.

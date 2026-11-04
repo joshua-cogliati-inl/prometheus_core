@@ -13,13 +13,22 @@
 """Async files resource."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from ..models.file import FileMetadata
+from ..exceptions import StorageClientError
+from ..nexus_client import generated_client, operation
 from .base import AsyncBaseResource
 
 
 class AsyncFilesResource(AsyncBaseResource):
     """Handles async operations related to file storage and retrieval."""
+
+    def _generated(self) -> Any:
+        return generated_client(self._client, asynchronous=True)
+
+    def _scope(self) -> tuple:
+        config = self._client.config
+        return config.organization_id, config.project_id
 
     async def upload(
         self, file_path: Path, name: Optional[str] = None, description: Optional[str] = None
@@ -57,24 +66,57 @@ class AsyncFilesResource(AsyncBaseResource):
         return await uploader.upload(file_path, name, description)
 
     async def get(self, file_id: int) -> FileMetadata:
-        """Get file metadata by ID asynchronously."""
-        # Files are retrieved via records endpoint (they're records with file attachments)
-        response = await self._client._request("GET", f"{self._base_path}/records/{file_id}")
+        """Get file metadata by ID.
 
-        return self._parse_file_metadata(response.json())
+        Files are records, so this reads the record.
+
+        Raises:
+            ItemNotFoundError: If file doesn't exist
+        """
+        organization_id, project_id = self._scope()
+        response = await operation("record", "api_get_a_record").asyncio_detailed(
+            organization_id, project_id, file_id, client=self._generated()
+        )
+        if response.parsed is None or not hasattr(response.parsed, "id"):
+            raise StorageClientError(
+                f"Unexpected response to get file (HTTP {int(response.status_code)})"
+            )
+        return FileMetadata.from_generated(response.parsed)
 
     async def download(self, file_id: int, output_path: Path) -> None:
-        """Download a file to local storage asynchronously."""
-        # Download using the files endpoint with record ID
-        response = await self._client._request("GET", f"{self._base_path}/files/{file_id}")
+        """Download a file to local storage.
+
+        Args:
+            file_id: File identifier (record ID from upload)
+            output_path: Where to save the downloaded file
+
+        Raises:
+            ItemNotFoundError: If file doesn't exist
+
+        Example:
+            ```python
+            await client.files.download(123, Path("downloaded.csv"))
+            ```
+        """
+        organization_id, project_id = self._scope()
+        response = await operation("file", "api_download_file").asyncio_detailed(
+            organization_id, project_id, file_id, client=self._generated()
+        )
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "wb") as f:
             f.write(response.content)
 
     async def delete(self, file_id: int) -> None:
-        """Delete a file asynchronously."""
-        await self._client._request("DELETE", f"{self._base_path}/files/{file_id}")
+        """Delete a file.
+
+        Raises:
+            ItemNotFoundError: If file doesn't exist
+        """
+        organization_id, project_id = self._scope()
+        await operation("file", "api_delete_file").asyncio_detailed(
+            organization_id, project_id, file_id, client=self._generated()
+        )
 
     def _parse_file_metadata(self, data: dict) -> FileMetadata:
         """Parse API response data into FileMetadata model."""

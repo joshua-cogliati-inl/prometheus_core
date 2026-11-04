@@ -13,13 +13,22 @@
 """Files resource for synchronous operations."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from ..models.file import FileMetadata
+from ..exceptions import StorageClientError
+from ..nexus_client import generated_client, operation
 from .base import BaseResource
 
 
 class FilesResource(BaseResource):
     """Handles operations related to file storage and retrieval."""
+
+    def _generated(self) -> Any:
+        return generated_client(self._client)
+
+    def _scope(self) -> tuple:
+        config = self._client.config
+        return config.organization_id, config.project_id
 
     def upload(
         self, file_path: Path, name: Optional[str] = None, description: Optional[str] = None
@@ -96,19 +105,20 @@ class FilesResource(BaseResource):
     def get(self, file_id: int) -> FileMetadata:
         """Get file metadata by ID.
 
-        Args:
-            file_id: File identifier
-
-        Returns:
-            File metadata
+        Files are records, so this reads the record.
 
         Raises:
             ItemNotFoundError: If file doesn't exist
         """
-        # Files are retrieved via records endpoint (they're records with file attachments)
-        response = self._client._request("GET", f"{self._base_path}/records/{file_id}")
-
-        return self._parse_file_metadata(response.json())
+        organization_id, project_id = self._scope()
+        response = operation("record", "api_get_a_record").sync_detailed(
+            organization_id, project_id, file_id, client=self._generated()
+        )
+        if response.parsed is None or not hasattr(response.parsed, "id"):
+            raise StorageClientError(
+                f"Unexpected response to get file (HTTP {int(response.status_code)})"
+            )
+        return FileMetadata.from_generated(response.parsed)
 
     def download(self, file_id: int, output_path: Path) -> None:
         """Download a file to local storage.
@@ -125,10 +135,11 @@ class FilesResource(BaseResource):
             client.files.download(123, Path("downloaded.csv"))
             ```
         """
-        # Download using the files endpoint with record ID
-        response = self._client._request("GET", f"{self._base_path}/files/{file_id}")
+        organization_id, project_id = self._scope()
+        response = operation("file", "api_download_file").sync_detailed(
+            organization_id, project_id, file_id, client=self._generated()
+        )
 
-        # Write file content
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "wb") as f:
             f.write(response.content)
@@ -136,13 +147,13 @@ class FilesResource(BaseResource):
     def delete(self, file_id: int) -> None:
         """Delete a file.
 
-        Args:
-            file_id: File identifier
-
         Raises:
             ItemNotFoundError: If file doesn't exist
         """
-        self._client._request("DELETE", f"{self._base_path}/files/{file_id}")
+        organization_id, project_id = self._scope()
+        operation("file", "api_delete_file").sync_detailed(
+            organization_id, project_id, file_id, client=self._generated()
+        )
 
     def _parse_file_metadata(self, data: dict) -> FileMetadata:
         """Parse API response data into FileMetadata model.
