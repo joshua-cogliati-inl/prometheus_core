@@ -12,13 +12,46 @@
 
 """Async relationships resource."""
 
+import json
 from typing import Any, Dict, List, Optional
+from ..models.item import value_of
 from ..models.relationship import Relationship, RelationshipCreate
+from ..exceptions import StorageClientError
+from ..nexus_client import ensure_nexus_client, generated_client, operation
 from .base import AsyncBaseResource
 
 
 class AsyncRelationshipsResource(AsyncBaseResource):
     """Handles async operations related to relationships between items."""
+
+    def _generated(self) -> Any:
+        return generated_client(self._client, asynchronous=True)
+
+    def _scope(self) -> tuple:
+        config = self._client.config
+        return config.organization_id, config.project_id
+
+    @staticmethod
+    def _edge(response: Any, action: str) -> Relationship:
+        """Build a relationship from a generated edge response.
+
+        Some DeepLynx endpoints wrap the edge in ``{"value": ...}``; the generated parser does
+        not see through that, so the wrapped body is re-parsed here.
+        """
+        parsed = response.parsed
+        if parsed is not None and value_of(parsed, "origin_id") is None:
+            try:
+                body = json.loads(response.content)
+            except ValueError:
+                body = None
+            if isinstance(body, dict) and isinstance(body.get("value"), dict):
+                dto = ensure_nexus_client().models.EdgeResponseDto.from_dict(body["value"])
+                return Relationship.from_generated(dto)
+        if parsed is None or not hasattr(parsed, "id"):
+            raise StorageClientError(
+                f"Unexpected response to {action} (HTTP {int(response.status_code)})"
+            )
+        return Relationship.from_generated(parsed)
 
     async def create(self, relationship: RelationshipCreate) -> Relationship:
         """Create a new relationship between two items asynchronously."""
@@ -44,20 +77,27 @@ class AsyncRelationshipsResource(AsyncBaseResource):
         return self._parse_relationship(data)
 
     async def get(self, relationship_id: int) -> Relationship:
-        """Get a relationship by ID asynchronously."""
-        response = await self._client._request("GET", f"{self._base_path}/edges/{relationship_id}")
+        """Get a relationship by ID.
 
-        data = response.json()
-
-        # Some DeepLynx endpoints wrap response in 'value' field
-        if isinstance(data, dict) and "value" in data:
-            data = data["value"]
-
-        return self._parse_relationship(data)
+        Raises:
+            ItemNotFoundError: If relationship doesn't exist
+        """
+        organization_id, project_id = self._scope()
+        response = await operation("edge", "api_get_edge_by_id").asyncio_detailed(
+            organization_id, project_id, relationship_id, client=self._generated()
+        )
+        return self._edge(response, "get relationship")
 
     async def delete(self, relationship_id: int) -> None:
-        """Delete a relationship asynchronously."""
-        await self._client._request("DELETE", f"{self._base_path}/edges/{relationship_id}")
+        """Delete a relationship.
+
+        Raises:
+            ItemNotFoundError: If relationship doesn't exist
+        """
+        organization_id, project_id = self._scope()
+        await operation("edge", "api_delete_edge_by_id").asyncio_detailed(
+            organization_id, project_id, relationship_id, client=self._generated()
+        )
 
     async def bulk_create(self, relationships: List[RelationshipCreate]) -> List[Relationship]:
         """Create multiple relationships in a single request asynchronously."""
@@ -90,69 +130,48 @@ class AsyncRelationshipsResource(AsyncBaseResource):
     async def get_item_relationships(
         self, item_id: int, direction: Optional[str] = None
     ) -> List[Relationship]:
-        """Get all relationships for an item asynchronously."""
+        """Get all relationships for an item.
+
+        Args:
+            item_id: Item identifier
+            direction: Filter by direction ('outgoing', 'incoming', or None for both)
+
+        Returns:
+            List of relationships. The list route returns only the related record and the
+            relationship's name, so ``id`` is 0 and ``properties`` is empty.
+
+        Example:
+            ```python
+            all_rels = client.relationships.get_item_relationships(123)
+            outgoing = client.relationships.get_item_relationships(123, "outgoing")
+            ```
+        """
         # If direction not specified, get both outgoing and incoming
         if direction is None:
             outgoing = await self.get_item_relationships(item_id, "outgoing")
             incoming = await self.get_item_relationships(item_id, "incoming")
             return outgoing + incoming
 
-        params: Dict[str, Any] = {
-            "page": 1,
-            "pageSize": 100,  # Maximum allowed by DeepLynx API
-        }
-
-        # Map direction to isOrigin boolean
-        # outgoing: this item is the origin (isOrigin=true)
-        # incoming: this item is the destination (isOrigin=false)
-        if direction == "outgoing":
-            params["isOrigin"] = "true"
-        elif direction == "incoming":
-            params["isOrigin"] = "false"
-
-        response = await self._client._request(
-            "GET", f"{self._base_path}/records/{item_id}/edges", params=params
+        # outgoing: this item is the origin (isOrigin=true); incoming: it is the destination
+        is_origin = direction == "outgoing"
+        organization_id, project_id = self._scope()
+        response = await operation("record", "api_get_edges_by_record").asyncio_detailed(
+            organization_id,
+            project_id,
+            item_id,
+            client=self._generated(),
+            is_origin=is_origin,
+            page=1,
+            page_size=100,  # Maximum allowed by DeepLynx API
         )
-
-        data = response.json()
-
-        # API may return edges directly as a list or wrapped in a dict
-        if isinstance(data, list):
-            edges = data
-        else:
-            edges = data.get("edges", [])
-
-        # Parse relationships, handling different response formats
-        relationships = []
-        for rel_data in edges:
-            # Check if this is the simplified format (from list endpoint)
-            if "relatedRecordId" in rel_data:
-                # Simplified format: reconstruct full relationship
-                if direction == "outgoing":
-                    from_id = item_id
-                    to_id = rel_data.get("relatedRecordId")
-                else:  # incoming
-                    from_id = rel_data.get("relatedRecordId")
-                    to_id = item_id
-
-                relationships.append(
-                    Relationship(
-                        id=rel_data.get("id", 0),
-                        from_item_id=from_id,
-                        to_item_id=to_id,
-                        relationship_type=rel_data.get("name", ""),
-                        properties=rel_data.get("properties", {}),
-                        created_at=rel_data.get("createdAt"),
-                        updated_at=rel_data.get("lastUpdatedAt"),
-                        relationship_pair_id=rel_data.get("relationshipId"),
-                        data_source_id=rel_data.get("dataSourceId"),
-                    )
-                )
-            else:
-                # Full format: use standard parser
-                relationships.append(self._parse_relationship(rel_data))
-
-        return relationships
+        if not isinstance(response.parsed, list):
+            raise StorageClientError(
+                f"Unexpected response to list relationships (HTTP {int(response.status_code)})"
+            )
+        return [
+            Relationship.from_related_record(related, item_id, is_origin)
+            for related in response.parsed
+        ]
 
     async def get_item_graph(self, item_id: int, depth: int = 1) -> Dict[str, Any]:
         """Get a graph of relationships starting from an item asynchronously."""

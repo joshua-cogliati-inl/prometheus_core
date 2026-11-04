@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 
+from .item import value_of
+
 
 class RelationshipBase(BaseModel):
     """Base model for relationship data."""
@@ -69,6 +71,54 @@ class Relationship(RelationshipBase):
                 return {}
             return decoded if isinstance(decoded, dict) else {}
         return value
+
+    @classmethod
+    def from_generated(cls, dto: Any) -> "Relationship":
+        """Build a relationship from a generated ``EdgeResponseDto``.
+
+        ``properties`` is the JSON string (or null) Nexus returns and is decoded by the model.
+        The edge response carries ``relationshipId`` but not the relationship's name, so
+        ``relationship_type`` stays empty. Raises ``ValueError`` without origin and destination IDs.
+        """
+        origin_id = value_of(dto, "origin_id")
+        destination_id = value_of(dto, "destination_id")
+        if origin_id is None or destination_id is None:
+            raise ValueError(
+                "API response missing required node ID fields. Expected 'originId' and "
+                f"'destinationId'; got {sorted(getattr(dto, 'additional_properties', {}))}."
+            )
+        relationship_id = value_of(dto, "relationship_id")
+        data_source_id = value_of(dto, "data_source_id")
+        return cls(
+            id=int(dto.id),
+            from_item_id=int(origin_id),
+            to_item_id=int(destination_id),
+            properties=value_of(dto, "properties"),
+            created_at=None,
+            updated_at=value_of(dto, "last_updated_at"),
+            relationship_pair_id=None if relationship_id is None else int(relationship_id),
+            data_source_id=None if data_source_id is None else int(data_source_id),
+        )
+
+    @classmethod
+    def from_related_record(cls, dto: Any, item_id: int, outgoing: bool) -> "Relationship":
+        """Build a relationship from a generated ``RelatedRecordsResponseDto``.
+
+        The list-by-record route returns only the related record and the relationship's name,
+        so ``id`` is 0 and ``properties`` is empty; ``item_id`` is the origin when ``outgoing``.
+        """
+        related = value_of(dto, "related_record_id")
+        if related is None:
+            raise ValueError("API response missing 'relatedRecordId' for a related record.")
+        return cls(
+            from_item_id=item_id if outgoing else int(related),
+            to_item_id=int(related) if outgoing else item_id,
+            relationship_type=value_of(dto, "relationship_name") or "",
+            created_at=None,
+            updated_at=None,
+            relationship_pair_id=None,
+            data_source_id=None,
+        )
 
 
 class BulkRelationshipCreate(BaseModel):
