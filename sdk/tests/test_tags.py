@@ -13,10 +13,24 @@
 import asyncio
 from types import SimpleNamespace
 
+import httpx
+import pytest
+
 from prometheus_api.storage_client.async_resources.tags import AsyncTagsResource
 from prometheus_api.storage_client.async_resources.items import AsyncItemsResource
 from prometheus_api.storage_client.resources.items import ItemsResource
+from prometheus_api.storage_client.exceptions import StorageClientError
+from prometheus_api.storage_client.nexus_client import PATH_ENV_VAR, ensure_nexus_client
 from prometheus_api.storage_client.resources.tags import TagsResource
+
+
+@pytest.fixture
+def generated_client_available():
+    """The tags resource drives the generated client, so skip when it cannot be imported."""
+    try:
+        ensure_nexus_client()
+    except StorageClientError:
+        pytest.skip(f"deeplynx_nexus_client is not installed and {PATH_ENV_VAR} is not set")
 
 
 class _Response:
@@ -29,11 +43,13 @@ class _Response:
 
 class _SyncClient:
     def __init__(self):
-        self.config = SimpleNamespace(organization_id=1, project_id=42)
+        self.config = SimpleNamespace(
+            organization_id=1, project_id=42, base_url="http://nexus.test/api/v1"
+        )
         self.calls = []
         self._responses = [
-            _Response([]),
-            _Response({"id": 11, "name": "debug"}),
+            httpx.Response(200, json=[]),
+            httpx.Response(200, json={"id": 11, "name": "debug"}),
         ]
 
     def _request(self, method, path, **kwargs):
@@ -43,7 +59,9 @@ class _SyncClient:
 
 class _AsyncClient:
     def __init__(self, responses):
-        self.config = SimpleNamespace(organization_id=1, project_id=42)
+        self.config = SimpleNamespace(
+            organization_id=1, project_id=42, base_url="http://nexus.test/api/v1"
+        )
         self.calls = []
         self._responses = list(responses)
 
@@ -52,7 +70,7 @@ class _AsyncClient:
         return self._responses.pop(0)
 
 
-def test_sync_tags_use_project_scope():
+def test_sync_tags_use_project_scope(generated_client_available):
     client = _SyncClient()
     resource = TagsResource(client)
 
@@ -60,16 +78,20 @@ def test_sync_tags_use_project_scope():
 
     assert resolved == [11]
     assert client.calls == [
-        ("GET", "/projects/42/tags", {}),
-        ("POST", "/projects/42/tags", {"json": {"name": "debug"}}),
+        ("GET", "/projects/42/tags", {"params": {"hideArchived": True}}),
+        (
+            "POST",
+            "/projects/42/tags",
+            {"json": {"name": "debug"}, "headers": {"Content-Type": "application/json"}},
+        ),
     ]
 
 
-def test_async_tags_reject_non_positive_ids():
+def test_async_tags_reject_non_positive_ids(generated_client_available):
     client = _AsyncClient(
         [
-            _Response([]),
-            _Response({"id": 0, "name": "debug"}),
+            httpx.Response(200, json=[]),
+            httpx.Response(200, json={"id": 0, "name": "debug"}),
         ]
     )
     resource = AsyncTagsResource(client)
@@ -81,8 +103,12 @@ def test_async_tags_reject_non_positive_ids():
         assert "valid positive id" in str(exc)
 
     assert client.calls == [
-        ("GET", "/projects/42/tags", {}),
-        ("POST", "/projects/42/tags", {"json": {"name": "debug"}}),
+        ("GET", "/projects/42/tags", {"params": {"hideArchived": True}}),
+        (
+            "POST",
+            "/projects/42/tags",
+            {"json": {"name": "debug"}, "headers": {"Content-Type": "application/json"}},
+        ),
     ]
 
 

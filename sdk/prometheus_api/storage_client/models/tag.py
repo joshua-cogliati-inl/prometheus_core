@@ -12,7 +12,7 @@
 
 """Tag models for the storage client."""
 
-from typing import Optional
+from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 
@@ -23,3 +23,12 @@ class TagModel(BaseModel):
     name: str = Field(..., description="Tag name")
 
     model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_generated(cls, dto: Any) -> "TagModel":
+        """Build a tag from a generated ``TagResponseDto`` (unset fields become ``None``)."""
+        tag_id = getattr(dto, "id", None)
+        return cls(
+            id=int(tag_id) if isinstance(tag_id, (int, str)) and tag_id != "" else None,
+            name=str(dto.name),
+        )
