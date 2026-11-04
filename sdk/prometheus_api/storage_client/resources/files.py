@@ -13,11 +13,38 @@
 """Files resource for synchronous operations."""
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, BinaryIO, Dict, Optional, Tuple
 from ..models.file import FileMetadata
 from ..exceptions import StorageClientError
-from ..nexus_client import generated_client, operation
+from ..nexus_client import generated_client, models, operation, types
 from .base import BaseResource
+
+
+def build_upload_request(
+    organization_id: int, project_id: int, payload: BinaryIO, file_name: str
+) -> Tuple[str, str, Dict[str, Any]]:
+    """The file upload request as ``(method, path, request kwargs)``.
+
+    Built from the generated ``api_upload_file`` operation and ``ApiUploadFileBody``: a
+    multipart body whose ``file`` part carries ``file_name`` (the stored name). No data source
+    is sent, so the server uses the project default, as before.
+    """
+    body = models().ApiUploadFileBody(file=types().File(payload=payload, file_name=file_name))
+    request = operation("file", "api_upload_file")._get_kwargs(
+        organization_id, project_id, body=body
+    )
+    method, path = request.pop("method"), request.pop("url")
+    return str(method).upper(), str(path), request
+
+
+def parse_file_record(data: Dict[str, Any]) -> FileMetadata:
+    """File metadata from a record body, parsed through the generated ``RecordResponseDto``.
+
+    The generated parser iterates ``tags`` and ``labels`` without a null check, so null lists
+    are dropped first.
+    """
+    record = {k: v for k, v in data.items() if not (k in ("tags", "labels") and v is None)}
+    return FileMetadata.from_generated(models().RecordResponseDto.from_dict(record))
 
 
 class FilesResource(BaseResource):
@@ -56,19 +83,12 @@ class FilesResource(BaseResource):
 
         file_name = name or file_path.name
 
-        # Open and upload file
+        organization_id, project_id = self._scope()
         with open(file_path, "rb") as f:
-            files = {"file": (file_name, f)}
-            data = {}
+            method, path, request = build_upload_request(organization_id, project_id, f, file_name)
+            response = self._client._request(method, path, **request)
 
-            if description:
-                data["description"] = description
-
-            response = self._client._request(
-                "POST", f"{self._base_path}/files", files=files, data=data
-            )
-
-        return self._parse_file_metadata(response.json())
+        return parse_file_record(response.json())
 
     def upload_chunked(
         self,

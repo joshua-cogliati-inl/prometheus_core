@@ -114,3 +114,61 @@ async def test_delete_calls_the_file_route_and_returns_none_in_sync_and_async():
 
     assert sync_client.calls == async_client.calls
     assert sync_client.calls[0][:2] == ("DELETE", "/organizations/1/projects/2/files/77")
+
+
+async def test_upload_sends_one_file_part_with_the_stored_name_in_sync_and_async(tmp_path):
+    """Covers REQ-003-01: upload posts a multipart ``file`` part named ``name`` or the file's name."""
+    src = tmp_path / "local.txt"
+    src.write_bytes(b"hello\x00bytes")
+    seen = []
+
+    class Capturing(SyncClient):
+        def _request(self, method, path, **kwargs):
+            parts = [(key, value[0], value[1].read()) for key, value in kwargs["files"]]
+            seen.append((method, path, parts, kwargs.get("params"), kwargs.get("data")))
+            return self._response
+
+    class AsyncCapturing(Capturing):
+        async def _request(self, method, path, **kwargs):
+            return Capturing._request(self, method, path, **kwargs)
+
+    record = httpx.Response(200, json=RECORD)
+
+    FilesResource(Capturing(record)).upload(src)
+    FilesResource(Capturing(record)).upload(src, name="custom.txt")
+    await AsyncFilesResource(AsyncCapturing(record)).upload(src, name="custom.txt")
+
+    method, path, parts, params, data = seen[0]
+    assert (method, path) == ("POST", "/organizations/1/projects/2/files")
+    assert parts == [("file", "local.txt", b"hello\x00bytes")]
+    # No data source or description is sent; ``embed=false`` is the generated default (and the
+    # server's), so the project default data source is still used
+    assert params == {"embed": False} and data is None
+    assert seen[1][2] == [("file", "custom.txt", b"hello\x00bytes")]
+    assert seen[2] == seen[1]
+
+
+async def test_upload_returns_the_parsed_record_even_with_null_tag_lists(tmp_path):
+    """Covers REQ-003-01: the response record becomes FileMetadata; null tags do not break it."""
+    src = tmp_path / "f.txt"
+    src.write_text("x")
+    record = httpx.Response(200, json={**RECORD, "tags": None, "labels": None})
+
+    sync = FilesResource(SyncClient(record)).upload(src)
+    asynchronous = await AsyncFilesResource(AsyncClient(record)).upload(src)
+
+    assert sync == asynchronous
+    assert (sync.id, sync.name, sync.file_type, sync.size) == (77, "data.csv", "csv", 1234)
+
+
+async def test_upload_rejects_a_missing_path_before_any_request(tmp_path):
+    """Covers REQ-003-01 and BEH-003-01: a missing local file raises ValueError, sending nothing."""
+    sync_client, async_client = SyncClient(None), AsyncClient(None)
+    missing = tmp_path / "nope.txt"
+
+    with pytest.raises(ValueError, match="does not exist"):
+        FilesResource(sync_client).upload(missing)
+    with pytest.raises(ValueError, match="does not exist"):
+        await AsyncFilesResource(async_client).upload(missing)
+
+    assert sync_client.calls == [] and async_client.calls == []

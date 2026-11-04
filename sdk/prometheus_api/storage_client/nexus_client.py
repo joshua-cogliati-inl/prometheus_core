@@ -78,6 +78,12 @@ def models() -> ModuleType:
     return importlib.import_module(f"{PACKAGE}.models")
 
 
+def types() -> ModuleType:
+    """Return the generated ``types`` module (``File`` and friends)."""
+    ensure_nexus_client()
+    return importlib.import_module(f"{PACKAGE}.types")
+
+
 def operation(group: str, name: str) -> ModuleType:
     """Return the generated operation module ``api/<group>/<name>``."""
     ensure_nexus_client()

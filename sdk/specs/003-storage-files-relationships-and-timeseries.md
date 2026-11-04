@@ -8,7 +8,7 @@ depends-on: 001, 002
 Support non-record storage workflows: binary files, large chunked uploads, relationships between items, and queries over tabular (timeseries) file records.
 
 ## Requirements
-- REQ-003-01: File upload MUST reject missing local paths, default the remote name to `Path.name`, include optional description, and return `FileMetadata`.
+- REQ-003-01: File upload MUST reject missing local paths, default the remote name to `Path.name`, include optional description, and return `FileMetadata`. The upload request MUST be built from the generated `api_upload_file` operation and `ApiUploadFileBody` (a multipart `file` part carrying the stored name) and sent through the client's own `_request`.
 - REQ-003-02: File metadata lookup MUST retrieve the backing record through `/records/{file_id}` (the generated `api_get_a_record` operation) and map it to `FileMetadata`: `fileType`, `fileSize`, `uri` and `lastUpdatedAt` fill `file_type`, `size`, `uri` and `updated_at`; `created_at` is `None` because a record carries no creation time. A response that is not a record MUST raise `StorageClientError`.
 - REQ-003-03: File download MUST request `/files/{file_id}` (the generated `api_download_file` operation), create parent directories for the target path, and write response bytes to disk.
 - REQ-003-04: File delete MUST call `/files/{file_id}` (the generated `api_delete_file` operation) and return `None` on success.

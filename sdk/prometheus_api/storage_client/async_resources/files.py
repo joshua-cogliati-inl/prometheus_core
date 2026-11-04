@@ -17,6 +17,7 @@ from typing import Any, Optional
 from ..models.file import FileMetadata
 from ..exceptions import StorageClientError
 from ..nexus_client import generated_client, operation
+from ..resources.files import build_upload_request, parse_file_record
 from .base import AsyncBaseResource
 
 
@@ -39,18 +40,12 @@ class AsyncFilesResource(AsyncBaseResource):
 
         file_name = name or file_path.name
 
+        organization_id, project_id = self._scope()
         with open(file_path, "rb") as f:
-            files = {"file": (file_name, f)}
-            data = {}
+            method, path, request = build_upload_request(organization_id, project_id, f, file_name)
+            response = await self._client._request(method, path, **request)
 
-            if description:
-                data["description"] = description
-
-            response = await self._client._request(
-                "POST", f"{self._base_path}/files", files=files, data=data
-            )
-
-        return self._parse_file_metadata(response.json())
+        return parse_file_record(response.json())
 
     async def upload_chunked(
         self,
