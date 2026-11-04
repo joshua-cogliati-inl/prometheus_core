@@ -12,6 +12,8 @@
 
 """Files resource for synchronous operations."""
 
+import io
+import json
 from pathlib import Path
 from typing import Any, BinaryIO, Dict, Optional, Tuple
 from ..models.file import FileMetadata
@@ -21,15 +23,30 @@ from .base import BaseResource
 
 
 def build_upload_request(
-    organization_id: int, project_id: int, payload: BinaryIO, file_name: str
+    organization_id: int,
+    project_id: int,
+    payload: BinaryIO,
+    file_name: str,
+    description: Optional[str] = None,
 ) -> Tuple[str, str, Dict[str, Any]]:
     """The file upload request as ``(method, path, request kwargs)``.
 
     Built from the generated ``api_upload_file`` operation and ``ApiUploadFileBody``: a
-    multipart body whose ``file`` part carries ``file_name`` (the stored name). No data source
-    is sent, so the server uses the project default, as before.
+    multipart body whose ``file`` part carries ``file_name`` (the stored name). The upload route
+    has no description field; a description travels in the optional ``metadata`` part, a JSON
+    document whose ``Name``, ``Description`` and ``Properties`` are all required and whose keys
+    are case-sensitive. ``Name`` repeats ``file_name`` so the two cannot disagree. Without a
+    description there is no ``metadata`` part, and the server names the description after the file.
+    No data source is sent, so the server uses the project default.
     """
     body = models().ApiUploadFileBody(file=types().File(payload=payload, file_name=file_name))
+    if description:
+        document = {"Name": file_name, "Description": description, "Properties": {}}
+        body.metadata = types().File(
+            payload=io.BytesIO(json.dumps(document).encode("utf-8")),
+            file_name="metadata.json",
+            mime_type="application/json",
+        )
     request = operation("file", "api_upload_file")._get_kwargs(
         organization_id, project_id, body=body
     )
@@ -85,7 +102,9 @@ class FilesResource(BaseResource):
 
         organization_id, project_id = self._scope()
         with open(file_path, "rb") as f:
-            method, path, request = build_upload_request(organization_id, project_id, f, file_name)
+            method, path, request = build_upload_request(
+                organization_id, project_id, f, file_name, description
+            )
             response = self._client._request(method, path, **request)
 
         return parse_file_record(response.json())

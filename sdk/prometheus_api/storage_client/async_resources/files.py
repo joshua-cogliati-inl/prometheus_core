@@ -42,7 +42,9 @@ class AsyncFilesResource(AsyncBaseResource):
 
         organization_id, project_id = self._scope()
         with open(file_path, "rb") as f:
-            method, path, request = build_upload_request(organization_id, project_id, f, file_name)
+            method, path, request = build_upload_request(
+                organization_id, project_id, f, file_name, description
+            )
             response = await self._client._request(method, path, **request)
 
         return parse_file_record(response.json())

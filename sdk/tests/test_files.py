@@ -172,3 +172,61 @@ async def test_upload_rejects_a_missing_path_before_any_request(tmp_path):
         await AsyncFilesResource(async_client).upload(missing)
 
     assert sync_client.calls == [] and async_client.calls == []
+
+
+async def test_upload_sends_the_description_in_a_metadata_part(tmp_path):
+    """Covers REQ-003-18: a description travels as a metadata JSON part the server requires."""
+    src = tmp_path / "local.txt"
+    src.write_text("body")
+    seen = []
+
+    class Capturing(SyncClient):
+        def _request(self, method, path, **kwargs):
+            seen.append(
+                {key: (value[0], value[1].read(), value[2]) for key, value in kwargs["files"]}
+            )
+            return self._response
+
+    class AsyncCapturing(Capturing):
+        async def _request(self, method, path, **kwargs):
+            return Capturing._request(self, method, path, **kwargs)
+
+    record = httpx.Response(200, json=RECORD)
+
+    FilesResource(Capturing(record)).upload(
+        src, name="custom.txt", description="Experiment results"
+    )
+    await AsyncFilesResource(AsyncCapturing(record)).upload(src, description="Éxperiment ✓")
+
+    import json
+
+    sync_parts, async_parts = seen
+    assert set(sync_parts) == {"file", "metadata"}
+    assert sync_parts["file"][:2] == ("custom.txt", b"body")
+    assert sync_parts["metadata"][0] == "metadata.json"
+    assert sync_parts["metadata"][2] == "application/json"
+    assert json.loads(sync_parts["metadata"][1]) == {
+        "Name": "custom.txt",
+        "Description": "Experiment results",
+        "Properties": {},
+    }
+    # Name repeats the file part's name, and non-ASCII text survives as UTF-8
+    assert json.loads(async_parts["metadata"][1])["Name"] == async_parts["file"][0] == "local.txt"
+    assert json.loads(async_parts["metadata"][1])["Description"] == "Éxperiment ✓"
+
+
+@pytest.mark.parametrize("description", [None, ""])
+def test_upload_without_a_description_sends_no_metadata_part(tmp_path, description):
+    """Covers REQ-003-18: without a description only the file part is sent."""
+    src = tmp_path / "local.txt"
+    src.write_text("body")
+    seen = []
+
+    class Capturing(SyncClient):
+        def _request(self, method, path, **kwargs):
+            seen.append([key for key, _ in kwargs["files"]])
+            return self._response
+
+    FilesResource(Capturing(httpx.Response(200, json=RECORD))).upload(src, description=description)
+
+    assert seen == [["file"]]
