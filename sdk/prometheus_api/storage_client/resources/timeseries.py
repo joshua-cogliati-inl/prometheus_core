@@ -12,29 +12,54 @@
 
 """Timeseries resource for synchronous operations."""
 
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence, Tuple
 from ..models.timeseries import TimeseriesResult
+from ..nexus_client import models, operation
 from .base import BaseResource
 
 
-def build_query_payload(
+def build_query_request(
+    organization_id: int,
+    project_id: int,
+    record_id: int,
+    view_name: str,
     sql_query: Optional[str],
     limit: Optional[int],
     row_stride: Optional[int],
     start_row: Optional[int],
     stop_row: Optional[int],
     columns: Optional[Sequence[str]],
-) -> Dict[str, Any]:
-    """The JSON body for ``olap/query``: only the options the caller provided, camelCase."""
+) -> Tuple[str, str, Dict[str, Any]]:
+    """The ``olap/query`` request as ``(method, path, request kwargs)``.
+
+    Built from the generated operation and ``OlapQueryRequestDto``, so the path and the body's
+    camelCase names come from the Nexus API description. Only the options the caller provided
+    (not ``None``) are in the body; falsy values such as ``0`` or ``""`` are kept.
+    """
     candidates = {
         "query": sql_query,
         "limit": limit,
-        "rowStride": row_stride,
-        "startRow": start_row,
-        "stopRow": stop_row,
+        "row_stride": row_stride,
+        "start_row": start_row,
+        "stop_row": stop_row,
         "columns": list(columns) if columns is not None else None,
     }
-    return {key: value for key, value in candidates.items() if value is not None}
+    body = models().OlapQueryRequestDto(**{k: v for k, v in candidates.items() if v is not None})
+    request = operation("olap", "api_execute_olap_query")._get_kwargs(
+        organization_id, project_id, record_id, body=body, view_name=view_name
+    )
+    method, path = request.pop("method"), request.pop("url")
+    return str(method).upper(), str(path), request
+
+
+def parse_query_result(data: Any) -> TimeseriesResult:
+    """A ``TimeseriesResult`` from the ``{columns, data}`` body; null or missing means empty.
+
+    Parsed here rather than by the generated ``PlotDataDto``, which fails on a null ``data``.
+    """
+    if not isinstance(data, dict):
+        return TimeseriesResult()
+    return TimeseriesResult(columns=data.get("columns") or [], data=data.get("data") or [])
 
 
 class TimeseriesResource(BaseResource):
@@ -96,15 +121,18 @@ class TimeseriesResource(BaseResource):
             print(result.columns, result.data[:3])
             ```
         """
-        response = self._client._request(
-            "POST",
-            f"{self._base_path}/records/{record_id}/olap/query",
-            params={"viewName": view_name},
-            json=build_query_payload(sql_query, limit, row_stride, start_row, stop_row, columns),
+        config = self._client.config
+        method, path, request = build_query_request(
+            config.organization_id,
+            config.project_id,
+            record_id,
+            view_name,
+            sql_query,
+            limit,
+            row_stride,
+            start_row,
+            stop_row,
+            columns,
         )
-
-        data = response.json()
-        return TimeseriesResult(
-            columns=data.get("columns") or [],
-            data=data.get("data") or [],
-        )
+        response = self._client._request(method, path, **request)
+        return parse_query_result(response.json())

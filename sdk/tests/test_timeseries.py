@@ -24,6 +24,10 @@ from prometheus_api.storage_client.models.timeseries import TimeseriesResult
 from prometheus_api.storage_client.resources.timeseries import TimeseriesResource
 
 
+# The query request is built from the generated Nexus client's operation and request model
+pytestmark = pytest.mark.requires_nexus_client
+
+
 class Response:
     def __init__(self, payload):
         self._payload = payload
@@ -76,6 +80,7 @@ async def test_query_posts_to_olap_route_with_defaults_in_sync_and_async():
     assert path == "/organizations/1/projects/2/records/123/olap/query"
     assert kwargs["params"] == {"viewName": "data"}
     assert kwargs["json"] == {}
+    assert kwargs["headers"] == {"Content-Type": "application/json"}
     assert sync_result == async_result
 
 
