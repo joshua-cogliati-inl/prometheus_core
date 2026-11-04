@@ -15,6 +15,8 @@
 from typing import Dict, Iterator, List, Optional, Any
 from ..models.item import Item, ItemCreate, ItemUpdate, Tag
 from ..models.pagination import Page, PageInfo
+from ..exceptions import StorageClientError
+from ..nexus_client import generated_client, operation
 from .base import BaseResource
 
 
@@ -39,35 +41,24 @@ class ItemsResource(BaseResource):
             ))
             ```
         """
-        # Prepare payload with snake_case field names for DeepLynx API
-        payload: Dict[str, Any] = {
-            "name": item.name,
-            # Required field; the server rejects an empty string, so default to the name
-            "description": item.description or item.name,
-            "properties": item.properties,  # Required field
-            "original_id": item.original_id or f"client-{item.name}-{id(item)}",  # Required field
-        }
-
-        if item.class_id:
-            payload["class_id"] = item.class_id
-
-        # Create the item (dataSourceId query parameter required)
-        params = {"dataSourceId": self._client._get_data_source_id()}
-
-        response = self._client._request(
-            "POST", f"{self._base_path}/records", json=payload, params=params
+        original_id = item.original_id or f"client-{item.name}-{id(item)}"
+        organization_id, project_id = self._scope()
+        response = operation("record", "api_create_a_record").sync_detailed(
+            organization_id,
+            project_id,
+            client=self._generated(),
+            body=item.to_generated(original_id),
+            data_source_id=self._client._get_data_source_id(),
         )
-
-        item_data = response.json()
+        created = self._record(response, "create item")
 
         # Handle tags if provided
         if item.tags:
-            item_id = item_data.get("id")
-            self.add_tags(item_id, item.tags)
+            self.add_tags(created.id, item.tags)
             # Refetch to get tags
-            return self.get(item_id)
+            return self.get(created.id)
 
-        return self._parse_item(item_data)
+        return created
 
     def get(self, item_id: int) -> Item:
         """Get an item by ID.
@@ -81,9 +72,11 @@ class ItemsResource(BaseResource):
         Raises:
             ItemNotFoundError: If item doesn't exist
         """
-        response = self._client._request("GET", f"{self._base_path}/records/{item_id}")
-
-        return self._parse_item(response.json())
+        organization_id, project_id = self._scope()
+        response = operation("record", "api_get_a_record").sync_detailed(
+            organization_id, project_id, item_id, client=self._generated()
+        )
+        return self._record(response, "get item")
 
     def update(self, item_id: int, update: ItemUpdate) -> Item:
         """Update an existing item.
@@ -103,26 +96,15 @@ class ItemsResource(BaseResource):
             )
             ```
         """
-        # Build payload with only provided fields
-        payload: Dict[str, Any] = {}
-
-        if update.name is not None:
-            payload["name"] = update.name
-        if update.description is not None:
-            payload["description"] = update.description
-        if update.properties is not None:
-            payload["properties"] = update.properties
-        if update.class_id is not None:
-            payload["class_id"] = update.class_id
-        if update.original_id is not None:
-            payload["original_id"] = update.original_id
-
-        # Use PUT for full update (PATCH tries to unarchive which can fail)
-        response = self._client._request(
-            "PUT", f"{self._base_path}/records/{item_id}", json=payload
+        organization_id, project_id = self._scope()
+        response = operation("record", "api_update_a_record").sync_detailed(
+            organization_id,
+            project_id,
+            item_id,
+            client=self._generated(),
+            body=update.to_generated(),
         )
-
-        return self._parse_item(response.json())
+        return self._record(response, "update item")
 
     def delete(self, item_id: int) -> None:
         """Delete an item.
@@ -133,7 +115,10 @@ class ItemsResource(BaseResource):
         Raises:
             ItemNotFoundError: If item doesn't exist
         """
-        self._client._request("DELETE", f"{self._base_path}/records/{item_id}")
+        organization_id, project_id = self._scope()
+        operation("record", "api_delete_a_record").sync_detailed(
+            organization_id, project_id, item_id, client=self._generated()
+        )
 
     def list(
         self, page: int = 1, page_size: int = 100, filters: Optional[Dict[str, Any]] = None
@@ -288,6 +273,21 @@ class ItemsResource(BaseResource):
             )
 
         return self.get(item_id)
+
+    def _generated(self) -> Any:
+        return generated_client(self._client)
+
+    def _scope(self) -> tuple:
+        config = self._client.config
+        return config.organization_id, config.project_id
+
+    @staticmethod
+    def _record(response: Any, action: str) -> Item:
+        if response.parsed is None or not hasattr(response.parsed, "id"):
+            raise StorageClientError(
+                f"Unexpected response to {action} (HTTP {int(response.status_code)})"
+            )
+        return Item.from_generated(response.parsed)
 
     def _parse_paginated_items(self, data: Any, page: int, page_size: int) -> Page[Item]:
         """Parse a ``PaginatedResponse<RecordResponseDto>`` into a ``Page[Item]``.

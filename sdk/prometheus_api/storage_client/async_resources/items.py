@@ -17,6 +17,8 @@ from typing import AsyncIterator, Dict, List, Optional, Any
 from importlib.metadata import version as pkg_version
 from ..models.item import Item, ItemCreate, ItemUpdate, Tag
 from ..models.pagination import Page, PageInfo
+from ..exceptions import StorageClientError
+from ..nexus_client import generated_client, operation
 from .base import AsyncBaseResource
 
 logger = logging.getLogger(__name__)
@@ -27,63 +29,49 @@ class AsyncItemsResource(AsyncBaseResource):
 
     async def create(self, item: ItemCreate) -> Item:
         """Create a new item asynchronously."""
-        payload: Dict[str, Any] = {
-            "name": item.name,
-            # Required field; the server rejects an empty string, so default to the name
-            "description": item.description or item.name,
-            "properties": item.properties,
-            "original_id": item.original_id or f"client-{item.name}-{id(item)}",
-        }
-
-        if item.class_id:
-            payload["class_id"] = item.class_id
-
-        params = {"dataSourceId": await self._client._get_data_source_id()}
-
-        response = await self._client._request(
-            "POST", f"{self._base_path}/records", json=payload, params=params
+        original_id = item.original_id or f"client-{item.name}-{id(item)}"
+        organization_id, project_id = self._scope()
+        response = await operation("record", "api_create_a_record").asyncio_detailed(
+            organization_id,
+            project_id,
+            client=self._generated(),
+            body=item.to_generated(original_id),
+            data_source_id=await self._client._get_data_source_id(),
         )
-
-        item_data = response.json()
+        created = self._record(response, "create item")
 
         if item.tags:
-            item_id = item_data.get("id")
-            await self.add_tags(item_id, item.tags)
-            return await self.get(item_id)
+            await self.add_tags(created.id, item.tags)
+            return await self.get(created.id)
 
-        return self._parse_item(item_data)
+        return created
 
     async def get(self, item_id: int) -> Item:
         """Get an item by ID asynchronously."""
-        response = await self._client._request("GET", f"{self._base_path}/records/{item_id}")
-
-        return self._parse_item(response.json())
+        organization_id, project_id = self._scope()
+        response = await operation("record", "api_get_a_record").asyncio_detailed(
+            organization_id, project_id, item_id, client=self._generated()
+        )
+        return self._record(response, "get item")
 
     async def update(self, item_id: int, update: ItemUpdate) -> Item:
         """Update an existing item asynchronously."""
-        payload: Dict[str, Any] = {}
-
-        if update.name is not None:
-            payload["name"] = update.name
-        if update.description is not None:
-            payload["description"] = update.description
-        if update.properties is not None:
-            payload["properties"] = update.properties
-        if update.class_id is not None:
-            payload["class_id"] = update.class_id
-        if update.original_id is not None:
-            payload["original_id"] = update.original_id
-
-        # Use PUT for full update (PATCH tries to unarchive which can fail)
-        response = await self._client._request(
-            "PUT", f"{self._base_path}/records/{item_id}", json=payload
+        organization_id, project_id = self._scope()
+        response = await operation("record", "api_update_a_record").asyncio_detailed(
+            organization_id,
+            project_id,
+            item_id,
+            client=self._generated(),
+            body=update.to_generated(),
         )
-
-        return self._parse_item(response.json())
+        return self._record(response, "update item")
 
     async def delete(self, item_id: int) -> None:
         """Delete an item asynchronously."""
-        await self._client._request("DELETE", f"{self._base_path}/records/{item_id}")
+        organization_id, project_id = self._scope()
+        await operation("record", "api_delete_a_record").asyncio_detailed(
+            organization_id, project_id, item_id, client=self._generated()
+        )
 
     async def list(
         self, page: int = 1, page_size: int = 100, filters: Optional[Dict[str, Any]] = None
@@ -175,6 +163,21 @@ class AsyncItemsResource(AsyncBaseResource):
             )
 
         return await self.get(item_id)
+
+    def _generated(self) -> Any:
+        return generated_client(self._client, asynchronous=True)
+
+    def _scope(self) -> tuple:
+        config = self._client.config
+        return config.organization_id, config.project_id
+
+    @staticmethod
+    def _record(response: Any, action: str) -> Item:
+        if response.parsed is None or not hasattr(response.parsed, "id"):
+            raise StorageClientError(
+                f"Unexpected response to {action} (HTTP {int(response.status_code)})"
+            )
+        return Item.from_generated(response.parsed)
 
     def _parse_paginated_items(self, data: Any, page: int, page_size: int) -> Page[Item]:
         """Parse a ``PaginatedResponse<RecordResponseDto>`` into a ``Page[Item]``.

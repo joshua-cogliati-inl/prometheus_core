@@ -112,19 +112,20 @@ def test_async_tags_reject_non_positive_ids(generated_client_available):
     ]
 
 
-def test_sync_item_add_tags_uses_singular_tag_id_params():
+def test_sync_item_add_tags_uses_singular_tag_id_params(generated_client_available):
     client = _SyncClient()
     client.tags = SimpleNamespace(resolve_ids=lambda names: [11, 12])
     client._responses = [
         _Response({}),
         _Response({}),
-        _Response(
-            {
+        httpx.Response(
+            200,
+            json={
                 "id": 99,
                 "name": "artifact",
-                "properties": {},
+                "properties": "{}",
                 "tags": [{"id": 11, "name": "debug"}, {"id": 12, "name": "svg"}],
-            }
+            },
         ),
     ]
     resource = ItemsResource(client)
@@ -135,22 +136,23 @@ def test_sync_item_add_tags_uses_singular_tag_id_params():
     assert client.calls == [
         ("POST", "/organizations/1/projects/42/records/99/tags", {"params": {"tagId": 11}}),
         ("POST", "/organizations/1/projects/42/records/99/tags", {"params": {"tagId": 12}}),
-        ("GET", "/organizations/1/projects/42/records/99", {}),
+        ("GET", "/organizations/1/projects/42/records/99", {"params": {"hideArchived": True}}),
     ]
 
 
-def test_async_item_add_tags_uses_singular_tag_id_params():
+def test_async_item_add_tags_uses_singular_tag_id_params(generated_client_available):
     client = _AsyncClient(
         [
             _Response({}),
             _Response({}),
-            _Response(
-                {
+            httpx.Response(
+                200,
+                json={
                     "id": 99,
                     "name": "artifact",
-                    "properties": {},
+                    "properties": "{}",
                     "tags": [{"id": 11, "name": "debug"}, {"id": 12, "name": "svg"}],
-                }
+                },
             ),
         ]
     )
@@ -163,7 +165,7 @@ def test_async_item_add_tags_uses_singular_tag_id_params():
     assert client.calls == [
         ("POST", "/organizations/1/projects/42/records/99/tags", {"params": {"tagId": 11}}),
         ("POST", "/organizations/1/projects/42/records/99/tags", {"params": {"tagId": 12}}),
-        ("GET", "/organizations/1/projects/42/records/99", {}),
+        ("GET", "/organizations/1/projects/42/records/99", {"params": {"hideArchived": True}}),
     ]
 
 

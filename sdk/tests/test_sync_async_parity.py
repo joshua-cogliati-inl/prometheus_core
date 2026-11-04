@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from prometheus_api.storage_client.async_resources.items import AsyncItemsResource
@@ -25,17 +26,22 @@ from prometheus_api.storage_client.resources.items import ItemsResource
 from prometheus_api.storage_client.resources.search import SearchResource
 
 
-class Response:
-    def __init__(self, payload):
-        self._payload = payload
+# Item get/create/update/delete go through the generated Nexus client
+ITEM_CLIENT = pytest.mark.requires_nexus_client
 
-    def json(self):
-        return self._payload
+
+class Response(httpx.Response):
+    """A real HTTP 200 response: the generated client parses status, headers and body."""
+
+    def __init__(self, payload):
+        super().__init__(200, json=payload)
 
 
 class SyncClient:
     def __init__(self, payload):
-        self.config = SimpleNamespace(organization_id=1, project_id=2)
+        self.config = SimpleNamespace(
+            organization_id=1, project_id=2, base_url="http://nexus.test/api/v1"
+        )
         self.calls = []
         self._payload = payload
 
@@ -72,6 +78,7 @@ def item_payload(**overrides):
     return payload
 
 
+@ITEM_CLIENT
 async def test_item_create_payloads_match_between_sync_and_async():
     sync_client = SyncClient(item_payload())
     async_client = AsyncClient(item_payload())
@@ -99,8 +106,10 @@ async def test_item_create_payloads_match_between_sync_and_async():
         "class_id": 9,
     }
     assert kwargs["params"] == {"dataSourceId": 7}
+    assert kwargs["headers"] == {"Content-Type": "application/json"}
 
 
+@ITEM_CLIENT
 @pytest.mark.parametrize("description", [None, ""])
 async def test_item_create_defaults_missing_description_to_name(description):
     """Covers REQ-002-02: DeepLynx rejects an empty description, so default to the item name."""
@@ -353,6 +362,7 @@ async def test_search_recent_rejects_non_positive_limit_in_sync_and_async(limit)
     assert sync_client.calls == [] and async_client.calls == []
 
 
+@ITEM_CLIENT
 async def test_item_update_payloads_match_between_sync_and_async():
     sync_client = SyncClient(item_payload(name="Updated"))
     async_client = AsyncClient(item_payload(name="Updated"))
@@ -379,7 +389,8 @@ async def test_item_update_payloads_match_between_sync_and_async():
                 "properties": {"kind": "updated"},
                 "class_id": 10,
                 "original_id": "orig-2",
-            }
+            },
+            "headers": {"Content-Type": "application/json"},
         },
     )
 
@@ -481,3 +492,64 @@ async def test_advanced_query_validation_matches_between_sync_and_async(page, pa
         sync_resource.advanced_query([], [2], page=page, page_size=page_size)
     with pytest.raises(ValueError, match=message):
         await async_resource.advanced_query([], [2], page=page, page_size=page_size)
+
+
+@ITEM_CLIENT
+async def test_item_get_and_delete_use_record_routes_in_sync_and_async():
+    """Covers REQ-002-17: get and delete address the record route through the generated client."""
+    sync_client = SyncClient(item_payload())
+    async_client = AsyncClient(item_payload())
+
+    sync_item = ItemsResource(sync_client).get(123)
+    async_item = await AsyncItemsResource(async_client).get(123)
+    ItemsResource(sync_client).delete(123)
+    await AsyncItemsResource(async_client).delete(123)
+
+    assert sync_item == async_item
+    assert sync_item.id == 123 and sync_item.class_id == 9 and sync_item.data_source_id == 7
+    assert sync_client.calls == async_client.calls
+    assert sync_client.calls[0][:2] == ("GET", "/organizations/1/projects/2/records/123")
+    assert sync_client.calls[1][:2] == ("DELETE", "/organizations/1/projects/2/records/123")
+
+
+@ITEM_CLIENT
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"properties": '{"a": 1}'}, {"a": 1}),
+        ({"properties": "not json"}, {}),
+        ({"properties": "[1, 2]"}, {}),
+        ({"properties": None}, {}),
+    ],
+)
+def test_item_from_generated_decodes_json_string_properties(overrides, expected):
+    """Covers REQ-002-16: Nexus sends properties as a JSON string; bad values become empty."""
+    client = SyncClient(item_payload(**overrides))
+
+    assert ItemsResource(client).get(123).properties == expected
+
+
+@ITEM_CLIENT
+def test_item_from_generated_tolerates_missing_and_null_fields():
+    """Covers REQ-002-16: absent fields and a null classId become None/defaults, not errors."""
+    client = SyncClient({"id": 5, "classId": None})
+
+    item = ItemsResource(client).get(5)
+
+    assert item.id == 5 and item.name == ""
+    assert item.class_id is None and item.original_id is None
+    assert item.tags == [] and item.properties == {}
+    assert item.created_at == item.updated_at
+
+
+@ITEM_CLIENT
+def test_item_from_generated_keeps_class_name_and_tags():
+    """Covers REQ-002-16: className (not a declared DTO field) and tags are preserved."""
+    payload = item_payload(className="Sensor", tags=[{"id": 4, "name": "debug"}])
+    del payload["lastUpdatedAt"]
+    client = SyncClient(payload)
+
+    item = ItemsResource(client).get(123)
+
+    assert item.metatype_name == "Sensor"
+    assert [(t.id, t.name) for t in item.tags] == [(4, "debug")]

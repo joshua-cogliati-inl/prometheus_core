@@ -1,7 +1,7 @@
 # 002 — Storage items, tags, search, and pagination
 
 status: implemented
-sources: docs/storage-client/GUIDE.md, prometheus_api/storage_client/models/item.py, prometheus_api/storage_client/models/pagination.py, prometheus_api/storage_client/models/tag.py, prometheus_api/storage_client/models/metadata.py, prometheus_api/storage_client/resources/items.py, prometheus_api/storage_client/resources/tags.py, prometheus_api/storage_client/resources/search.py, prometheus_api/storage_client/async_resources/items.py, prometheus_api/storage_client/async_resources/tags.py, prometheus_api/storage_client/async_resources/search.py, tests/test_models.py, tests/test_tags.py, tests/test_sync_async_parity.py, tests/test_integration.py
+sources: docs/storage-client/GUIDE.md, prometheus_api/storage_client/models/item.py, prometheus_api/storage_client/models/pagination.py, prometheus_api/storage_client/models/tag.py, prometheus_api/storage_client/nexus_client.py, prometheus_api/storage_client/models/metadata.py, prometheus_api/storage_client/resources/items.py, prometheus_api/storage_client/resources/tags.py, prometheus_api/storage_client/resources/search.py, prometheus_api/storage_client/async_resources/items.py, prometheus_api/storage_client/async_resources/tags.py, prometheus_api/storage_client/async_resources/search.py, tests/test_models.py, tests/test_tags.py, tests/test_sync_async_parity.py, tests/test_integration.py
 depends-on: 001
 
 ## Purpose
@@ -23,6 +23,8 @@ Expose DeepLynx records as typed `Item` objects with predictable CRUD, tagging, 
 - REQ-002-13: Sync and async item create/update payloads and search query parsing MUST remain aligned.
 - REQ-002-14: Sync and async advanced query MUST accept a list of structured filters and project IDs, optionally accept text search, validate page numbers and page sizes, POST matching payloads to `/organizations/{org}/query/records/advanced/paginated`, and parse server pagination into `Page[Item]`.
 - REQ-002-15: `recent(limit=100)` MUST return up to `limit` items of the active project, most recently updated first, by paging `GET /organizations/{org}/query/records/paginated` (`projectIds`, `sortBy` = date-newest, `PageNumber`, `PageSize` of at most 500) until `limit` items are collected or `hasNext` is false; a null `items` MUST be an empty page and a `limit` below 1 MUST raise `ValueError`.
+- REQ-002-16: Item get, create, update and delete MUST go through the generated Nexus client (`record` operations), and the response MUST be mapped to `Item` as follows: `properties` arrives as a JSON string and MUST be decoded (an invalid string, or one that is not an object, becomes `{}`); missing or null fields become `None` or the model default; `className` (not a declared field of the generated DTO) MUST populate `metatype_name`; `lastUpdatedAt` MUST populate both timestamps and default to the current time.
+- REQ-002-17: Item get and delete MUST address `/organizations/{org}/projects/{project}/records/{item_id}`. A response that does not parse as a record MUST raise `StorageClientError`.
 
 ## Behavior
 - BEH-002-01: GIVEN a tag list with duplicate and blank names WHEN IDs are resolved THEN each non-empty normalized name is resolved once.
