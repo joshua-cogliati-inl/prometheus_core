@@ -180,3 +180,58 @@ def test_sync_request_requires_context_manager():
     client = StorageClient(make_config())
     with pytest.raises(StorageClientError, match="not initialized"):
         client._request("GET", "/records")
+
+
+@pytest.mark.requires_nexus_client
+async def test_default_data_source_is_fetched_once_and_cached_in_sync_and_async():
+    """Covers REQ-001-12: the project default data source is fetched once, then cached."""
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, request.url.path))
+        return httpx.Response(200, json={"id": 91, "name": "default"})
+
+    sync = sync_client(handler)
+    asynchronous = async_client(handler)
+
+    first, second = sync._get_data_source_id(), sync._get_data_source_id()
+    async_first, async_second = (
+        await asynchronous._get_data_source_id(),
+        await asynchronous._get_data_source_id(),
+    )
+
+    assert first == second == async_first == async_second == 91
+    assert seen == [("GET", "/api/v1/projects/2/datasources/default")] * 2
+
+
+@pytest.mark.requires_nexus_client
+async def test_configured_data_source_skips_the_lookup():
+    """Covers REQ-001-12: a configured data_source_id is used without any request."""
+
+    def handler(request):
+        raise AssertionError("no request expected")
+
+    config = make_config().model_copy(update={"data_source_id": 5})
+    client = StorageClient(config)
+    client._http_client = httpx.Client(
+        base_url=config.base_url, transport=httpx.MockTransport(handler)
+    )
+    client._auth_handler = AuthHandler(config, client._http_client)
+
+    assert client._get_data_source_id() == 5
+
+
+@pytest.mark.requires_nexus_client
+@pytest.mark.parametrize(
+    "response",
+    [httpx.Response(200, json={}), httpx.Response(404, json={"error": "none"})],
+)
+async def test_missing_default_data_source_tells_the_user_to_configure_one(response):
+    """Covers REQ-001-12: no default data source gives the DEEPLYNX_DATA_SOURCE_ID hint."""
+    sync = sync_client(lambda request: response)
+    asynchronous = async_client(lambda request: response)
+
+    with pytest.raises(StorageClientError, match="DEEPLYNX_DATA_SOURCE_ID"):
+        sync._get_data_source_id()
+    with pytest.raises(StorageClientError, match="DEEPLYNX_DATA_SOURCE_ID"):
+        await asynchronous._get_data_source_id()

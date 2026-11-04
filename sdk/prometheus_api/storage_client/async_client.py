@@ -15,6 +15,7 @@
 from typing import Optional
 import httpx
 from .connection import ConnectionConfig
+from .nexus_client import generated_client, operation
 from .auth import AsyncAuthHandler
 from .exceptions import (
     AuthenticationError,
@@ -210,11 +211,15 @@ class AsyncStorageClient:
 
         # Fetch default data source from API
         try:
-            response = await self._request(
-                "GET", f"/projects/{self.config.project_id}/datasources/default"
+            response = await operation(
+                "project_data_source", "api_get_default_data_source_for_project"
+            ).asyncio_detailed(
+                self.config.project_id, client=generated_client(self, asynchronous=True)
             )
-            data = response.json()
-            self._default_data_source_id = data.get("id")
+            data_source_id = getattr(response.parsed, "id", None)
+            self._default_data_source_id = (
+                int(data_source_id) if isinstance(data_source_id, (int, str)) else None
+            )
 
             if not self._default_data_source_id:
                 raise StorageClientError("No default data source found")

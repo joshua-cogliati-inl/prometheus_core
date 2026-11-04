@@ -15,6 +15,7 @@
 from typing import Optional
 import httpx
 from .connection import ConnectionConfig
+from .nexus_client import generated_client, operation
 from .auth import AuthHandler
 from .exceptions import (
     AuthenticationError,
@@ -210,11 +211,13 @@ class StorageClient:
 
         # Fetch default data source from API
         try:
-            response = self._request(
-                "GET", f"/projects/{self.config.project_id}/datasources/default"
+            response = operation(
+                "project_data_source", "api_get_default_data_source_for_project"
+            ).sync_detailed(self.config.project_id, client=generated_client(self))
+            data_source_id = getattr(response.parsed, "id", None)
+            self._default_data_source_id = (
+                int(data_source_id) if isinstance(data_source_id, (int, str)) else None
             )
-            data = response.json()
-            self._default_data_source_id = data.get("id")
 
             if not self._default_data_source_id:
                 raise StorageClientError("No default data source found")
