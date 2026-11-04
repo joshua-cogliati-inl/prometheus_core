@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -44,7 +45,7 @@ def no_client_installed(monkeypatch):
         if m == PACKAGE or m.startswith(f"{PACKAGE}.")
     }
     saved_path = list(sys.path)
-    monkeypatch.setattr(sys, "path", [p for p in sys.path if PACKAGE not in p])
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if not _has_package(p)])
     monkeypatch.setattr(
         nexus_client.importlib,
         "import_module",
@@ -66,8 +67,12 @@ def _blocking_import(real_import):
     return fake
 
 
+def _has_package(path: str) -> bool:
+    return bool(path) and (Path(path) / PACKAGE).is_dir()
+
+
 def _fake_on_path() -> bool:
-    return any((__import__("pathlib").Path(p) / PACKAGE).is_dir() for p in sys.path if p)
+    return any(_has_package(p) for p in sys.path)
 
 
 def test_missing_client_without_variable_names_both_ways_to_get_it(

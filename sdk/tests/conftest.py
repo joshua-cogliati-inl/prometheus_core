@@ -19,11 +19,31 @@ import pytest
 from prometheus_api.agent import PrometheusAgent
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "requires_nexus_client: needs the generated Nexus client (skipped when it is not importable)",
+    )
+
+
 def pytest_collection_modifyitems(config, items):
-    """Automatically mark tests in test_integration.py with the integration marker."""
+    """Mark integration tests, and skip tests that need the generated Nexus client without it."""
+    from prometheus_api.storage_client.exceptions import StorageClientError
+    from prometheus_api.storage_client.nexus_client import PATH_ENV_VAR, ensure_nexus_client
+
+    client_error = None
+    try:
+        ensure_nexus_client()
+    except StorageClientError as error:
+        client_error = (
+            f"deeplynx_nexus_client is not installed and {PATH_ENV_VAR} is not set: {error}"
+        )
+
     for item in items:
         if "test_integration" in str(item.fspath):
             item.add_marker(pytest.mark.integration)
+        if client_error and item.get_closest_marker("requires_nexus_client"):
+            item.add_marker(pytest.mark.skip(reason=client_error))
 
 
 @pytest.fixture(autouse=True)
