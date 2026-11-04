@@ -273,16 +273,24 @@ class RelationshipsResource(BaseResource):
             depth: How many levels deep to traverse
 
         Returns:
-            Graph structure with items and relationships
+            Graph structure: ``{"nodes": [...], "links": [...]}`` as the server sends it
+            (camelCase keys). A body that is not an object is returned as ``{"result": body}``.
 
         Example:
             ```python
             graph = client.relationships.get_item_graph(123, depth=2)
             ```
         """
-        response = self._client._request(
-            "GET", f"{self._base_path}/records/{item_id}/graph", params={"depth": depth}
+        organization_id, project_id = self._scope()
+        # The generated operation parses the body as a graph object and fails on any other JSON
+        # type, so only its request is used; the body is parsed here to keep the wrapping below.
+        request = operation("record", "api_get_graph_data_for_record")._get_kwargs(
+            organization_id, project_id, item_id, depth=depth
         )
-
-        data = response.json()
-        return data if isinstance(data, dict) else {"result": data}
+        response = self._client._request(
+            request["method"].upper(), request["url"], params=request["params"]
+        )
+        body = response.json()
+        if not isinstance(body, dict):
+            return {"result": body}
+        return dict(models().GraphResponse.from_dict(body).to_dict())

@@ -416,3 +416,50 @@ def test_bulk_create_with_no_types_skips_the_type_lookup():
     assert [c[1] for c in client.calls] == ["/organizations/1/projects/2/edges/bulk"]
     assert "relationship_id" not in client.calls[0][2]["json"][0]
     assert result[0].relationship_type == ""
+
+
+GRAPH = {
+    "nodes": [
+        {"id": 249, "label": "a", "type": "root", "classId": None, "className": None},
+        {"id": 250, "label": "b", "type": "node", "classId": 3, "className": "Sensor"},
+    ],
+    "links": [
+        {
+            "edgeId": 67,
+            "relationshipId": 36,
+            "relationshipName": "depends_on",
+            "source": 249,
+            "target": 250,
+        }
+    ],
+}
+
+
+@NEXUS_CLIENT
+async def test_item_graph_returns_the_server_graph_in_sync_and_async():
+    """Covers REQ-003-11: the graph route is called with the depth and the graph is unchanged."""
+    sync_client, async_client = SyncClient(GRAPH), AsyncClient(GRAPH)
+
+    sync = RelationshipsResource(sync_client).get_item_graph(249, depth=2)
+    asynchronous = await AsyncRelationshipsResource(async_client).get_item_graph(249, depth=2)
+
+    assert sync == asynchronous == GRAPH
+    assert sync_client.calls == async_client.calls
+    method, path, kwargs = sync_client.calls[0]
+    assert (method, path) == ("GET", "/organizations/1/projects/2/records/249/graph")
+    assert kwargs["params"] == {"depth": 2}
+
+
+@NEXUS_CLIENT
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({}, {}),
+        ({"nodes": None, "links": None}, {"nodes": None, "links": None}),
+        ([1, 2], {"result": [1, 2]}),
+        ("text", {"result": "text"}),
+    ],
+)
+def test_item_graph_handles_empty_null_and_non_object_bodies(payload, expected):
+    """Covers REQ-003-11: an empty graph is a dict, and a non-object body is wrapped."""
+    assert RelationshipsResource(SyncClient(payload)).get_item_graph(1) == expected
