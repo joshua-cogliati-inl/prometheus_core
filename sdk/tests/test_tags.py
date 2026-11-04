@@ -33,14 +33,6 @@ def generated_client_available():
         pytest.skip(f"deeplynx_nexus_client is not installed and {PATH_ENV_VAR} is not set")
 
 
-class _Response:
-    def __init__(self, payload):
-        self._payload = payload
-
-    def json(self):
-        return self._payload
-
-
 class _SyncClient:
     def __init__(self):
         self.config = SimpleNamespace(
@@ -116,8 +108,8 @@ def test_sync_item_add_tags_uses_singular_tag_id_params(generated_client_availab
     client = _SyncClient()
     client.tags = SimpleNamespace(resolve_ids=lambda names: [11, 12])
     client._responses = [
-        _Response({}),
-        _Response({}),
+        httpx.Response(200),
+        httpx.Response(200),
         httpx.Response(
             200,
             json={
@@ -143,8 +135,8 @@ def test_sync_item_add_tags_uses_singular_tag_id_params(generated_client_availab
 def test_async_item_add_tags_uses_singular_tag_id_params(generated_client_available):
     client = _AsyncClient(
         [
-            _Response({}),
-            _Response({}),
+            httpx.Response(200),
+            httpx.Response(200),
             httpx.Response(
                 200,
                 json={

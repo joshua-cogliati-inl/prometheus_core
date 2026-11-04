@@ -233,11 +233,14 @@ class ItemsResource(BaseResource):
         tag_ids = self._client.tags.resolve_ids(tags)
         if not tag_ids:
             return self.get(item_id)
+        organization_id, project_id = self._scope()
         for tag_id in tag_ids:
-            self._client._request(
-                "POST",
-                f"{self._base_path}/records/{item_id}/tags",
-                params={"tagId": int(tag_id)},
+            operation("record", "api_attach_a_tag").sync_detailed(
+                organization_id,
+                project_id,
+                item_id,
+                client=self._generated(),
+                tag_id=int(tag_id),
             )
 
         return self.get(item_id)
@@ -260,11 +263,14 @@ class ItemsResource(BaseResource):
         tag_ids = self._client.tags.resolve_ids(tags)
         if not tag_ids:
             return self.get(item_id)
+        organization_id, project_id = self._scope()
         for tag_id in tag_ids:
-            self._client._request(
-                "DELETE",
-                f"{self._base_path}/records/{item_id}/tags",
-                params={"tagId": int(tag_id)},
+            operation("record", "api_unattach_a_tag").sync_detailed(
+                organization_id,
+                project_id,
+                item_id,
+                client=self._generated(),
+                tag_id=int(tag_id),
             )
 
         return self.get(item_id)
