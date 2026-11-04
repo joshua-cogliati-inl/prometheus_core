@@ -71,6 +71,8 @@ Default `IMAGE_TAG` is `git rev-parse --short HEAD`.
 
 `ConnectionConfig` is a frozen Pydantic model that requires either (`api_key` + `api_secret`) **or** `jwt_token`, never both. It validates at construction. Use `ConnectionConfig.from_env()` to load from `DEEPLYNX_*` env vars (see `.env.example`). The default `base_url` is `https://deeplynx.inl.gov/api/v1`.
 
+**Generated Nexus client (migration in progress).** Resources are being moved onto the generated `deeplynx_nexus_client` package (so far only `tags`). `storage_client/nexus_client.py` finds it on the normal import path or in the checkout named by `NEXUS_PYTHON_CLIENT_PATH`, and `generated_client(owner)` returns a generated `Client` whose httpx calls are routed through `StorageClient._request` / `AsyncStorageClient._request`, so auth, retries and error mapping stay in one place. The client is not published yet; install it with `pip install .` from the generated package, or set `NEXUS_PYTHON_CLIENT_PATH`. Tests that need it skip when it is unavailable.
+
 `DeepLynxFileSystem` (fsspec) maps `deeplynx://` URIs to DeepLynx file records, storing object keys in record metadata rather than building a separate index. It's wired up automatically via the `[project.entry-points."fsspec.specs"]` declaration in `pyproject.toml`.
 
 ### PrometheusAgent contract

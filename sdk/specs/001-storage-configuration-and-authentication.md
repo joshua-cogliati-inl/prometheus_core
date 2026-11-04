@@ -1,7 +1,7 @@
 # 001 — Storage configuration and authentication
 
 status: implemented
-sources: README.md, docs/storage-client/GUIDE.md, docs/ENV_SETUP.md, prometheus_api/storage_client/connection.py, prometheus_api/storage_client/client.py, prometheus_api/storage_client/async_client.py, prometheus_api/storage_client/auth.py, prometheus_api/storage_client/exceptions.py, tests/test_connection.py, tests/test_env_config.py, tests/test_exceptions.py, tests/test_client_errors.py
+sources: README.md, docs/storage-client/GUIDE.md, docs/ENV_SETUP.md, prometheus_api/storage_client/connection.py, prometheus_api/storage_client/client.py, prometheus_api/storage_client/async_client.py, prometheus_api/storage_client/auth.py, prometheus_api/storage_client/exceptions.py, prometheus_api/storage_client/nexus_client.py, tests/test_nexus_client.py, tests/test_connection.py, tests/test_env_config.py, tests/test_exceptions.py, tests/test_client_errors.py
 depends-on: none
 
 ## Purpose
@@ -20,6 +20,7 @@ Provide a single typed contract for connecting to DeepLynx and a consistent sync
 - REQ-001-10: Client requests MUST retry timeout and connection failures up to `max_retries`, and MUST map 401, 404, other 4xx, and 5xx responses to `AuthenticationError`, `ItemNotFoundError`, `ValidationError`, and `APIError` respectively. The mapped exception MUST reach the caller as that type, with the server's message and (for `ValidationError`/`APIError`) the response body in `details`; it MUST NOT be re-wrapped in a generic `StorageClientError`.
 - REQ-001-11: API-key authentication MUST exchange `apiKey` and `apiSecret` for a JWT through `/oauth/tokens`, cache it, and refresh managed tokens before expiry or after one managed-token 401. ⚠ untested
 - REQ-001-12: If `data_source_id` is not configured, clients MUST fetch and cache the project default data source or raise a `StorageClientError` that instructs users to set `DEEPLYNX_DATA_SOURCE_ID`. ⚠ untested
+- REQ-001-13: Resources that use the generated Nexus client (`deeplynx_nexus_client`, currently the tags resource) MUST send its operations through the storage client's own `_request`, so authentication, retries and error mapping (REQ-001-09, REQ-001-10) apply unchanged. The client MUST be importable from the normal import path or from the checkout named by `NEXUS_PYTHON_CLIENT_PATH`; if it is neither, the first use MUST raise a `StorageClientError` that names the variable and `pip install .`.
 
 ## Behavior
 - BEH-001-01: GIVEN a config with API key credentials WHEN request headers are requested THEN the auth handler obtains a JWT and returns `Authorization: Bearer <token>`.
