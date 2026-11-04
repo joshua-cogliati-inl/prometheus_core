@@ -15,10 +15,10 @@
 import logging
 from typing import AsyncIterator, Dict, List, Optional, Any
 from importlib.metadata import version as pkg_version
-from ..models.item import Item, ItemCreate, ItemUpdate, Tag
+from ..models.item import Item, ItemCreate, ItemUpdate
 from ..models.pagination import Page, PageInfo
 from ..exceptions import StorageClientError
-from ..nexus_client import generated_client, operation
+from ..nexus_client import ensure_nexus_client, generated_client, operation
 from .base import AsyncBaseResource
 
 logger = logging.getLogger(__name__)
@@ -77,6 +77,8 @@ class AsyncItemsResource(AsyncBaseResource):
         self, page: int = 1, page_size: int = 100, filters: Optional[Dict[str, Any]] = None
     ) -> Page[Item]:
         """List items with pagination asynchronously."""
+        # ``filters`` is free-form, so the request is built here rather than through the typed
+        # generated operation; the response is still parsed through the generated record model.
         params: Dict[str, Any] = {"PageNumber": page, "PageSize": page_size}
 
         if filters:
@@ -105,29 +107,22 @@ class AsyncItemsResource(AsyncBaseResource):
 
     async def bulk_create(self, items: List[ItemCreate]) -> List[Item]:
         """Create multiple items in a single request asynchronously."""
-        payload = [
-            {
-                "name": item.name,
-                "description": item.description or item.name,
-                "properties": item.properties,
-                "original_id": item.original_id or f"client-{item.name}-{i}",
-                "class_id": item.class_id,
-            }
-            for i, item in enumerate(items)
-        ]
-
-        params = {"dataSourceId": await self._client._get_data_source_id()}
-
-        response = await self._client._request(
-            "POST", f"{self._base_path}/records/bulk", json=payload, params=params
+        organization_id, project_id = self._scope()
+        response = await operation("record", "api_create_many_records").asyncio_detailed(
+            organization_id,
+            project_id,
+            client=self._generated(),
+            body=[
+                item.to_generated(item.original_id or f"client-{item.name}-{i}")
+                for i, item in enumerate(items)
+            ],
+            data_source_id=await self._client._get_data_source_id(),
         )
-
-        data = response.json()
-        # API returns array directly
-        if isinstance(data, list):
-            return [self._parse_item(item_data) for item_data in data]
-        else:
-            return [self._parse_item(item_data) for item_data in data.get("records", [])]
+        if not isinstance(response.parsed, list):
+            raise StorageClientError(
+                f"Unexpected response to bulk create (HTTP {int(response.status_code)})"
+            )
+        return [Item.from_generated(record) for record in response.parsed]
 
     async def add_tags(self, item_id: int, tags: List[str]) -> Item:
         """Add tags to an item asynchronously. Tag names are resolved to IDs."""
@@ -197,40 +192,10 @@ class AsyncItemsResource(AsyncBaseResource):
         return Page(items=items, page_info=page_info)
 
     def _parse_item(self, data: Dict[str, Any]) -> Item:
-        """Parse API response data into an Item model."""
-        import json as json_lib
-        from datetime import datetime
+        """Parse one record from a raw response through the generated ``RecordResponseDto``.
 
-        # Parse properties if it's a JSON string
-        properties = data.get("properties", {})
-        if isinstance(properties, str):
-            try:
-                properties = json_lib.loads(properties)
-            except (TypeError, ValueError):
-                properties = {}
-
-        # Parse timestamp
-        timestamp_str = data.get("lastUpdatedAt")
-        if timestamp_str:
-            try:
-                timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            except ValueError:
-                timestamp = datetime.now()
-        else:
-            timestamp = datetime.now()
-
-        # Map DeepLynx fields to our generic model (API uses camelCase in response)
-        return Item(
-            id=data["id"],
-            name=data.get("name", ""),
-            description=data.get("description"),
-            properties=properties,
-            class_id=data.get("classId"),
-            original_id=data.get("originalId"),
-            created_at=timestamp,
-            updated_at=timestamp,
-            tags=[Tag(id=t.get("id"), name=t.get("name", "")) for t in (data.get("tags") or [])],
-            metatype_id=data.get("classId"),
-            metatype_name=data.get("className"),
-            data_source_id=data.get("dataSourceId"),
-        )
+        The generated parser iterates ``tags`` and ``labels`` without a null check, so a null
+        list is dropped first and treated as empty.
+        """
+        record = {k: v for k, v in data.items() if not (k in ("tags", "labels") and v is None)}
+        return Item.from_generated(ensure_nexus_client().models.RecordResponseDto.from_dict(record))

@@ -13,10 +13,10 @@
 """Items resource for synchronous operations."""
 
 from typing import Dict, Iterator, List, Optional, Any
-from ..models.item import Item, ItemCreate, ItemUpdate, Tag
+from ..models.item import Item, ItemCreate, ItemUpdate
 from ..models.pagination import Page, PageInfo
 from ..exceptions import StorageClientError
-from ..nexus_client import generated_client, operation
+from ..nexus_client import ensure_nexus_client, generated_client, operation
 from .base import BaseResource
 
 
@@ -140,6 +140,8 @@ class ItemsResource(BaseResource):
                 print(item.name)
             ```
         """
+        # ``filters`` is free-form, so the request is built here rather than through the typed
+        # generated operation; the response is still parsed through the generated record model.
         params: Dict[str, Any] = {"PageNumber": page, "PageSize": page_size}
 
         if filters:
@@ -196,29 +198,22 @@ class ItemsResource(BaseResource):
             ])
             ```
         """
-        payload = [
-            {
-                "name": item.name,
-                "description": item.description or item.name,
-                "properties": item.properties,
-                "original_id": item.original_id or f"client-{item.name}-{i}",
-                "class_id": item.class_id,
-            }
-            for i, item in enumerate(items)
-        ]
-
-        params = {"dataSourceId": self._client._get_data_source_id()}
-
-        response = self._client._request(
-            "POST", f"{self._base_path}/records/bulk", json=payload, params=params
+        organization_id, project_id = self._scope()
+        response = operation("record", "api_create_many_records").sync_detailed(
+            organization_id,
+            project_id,
+            client=self._generated(),
+            body=[
+                item.to_generated(item.original_id or f"client-{item.name}-{i}")
+                for i, item in enumerate(items)
+            ],
+            data_source_id=self._client._get_data_source_id(),
         )
-
-        data = response.json()
-        # API returns array directly
-        if isinstance(data, list):
-            return [self._parse_item(item_data) for item_data in data]
-        else:
-            return [self._parse_item(item_data) for item_data in data.get("records", [])]
+        if not isinstance(response.parsed, list):
+            raise StorageClientError(
+                f"Unexpected response to bulk create (HTTP {int(response.status_code)})"
+            )
+        return [Item.from_generated(record) for record in response.parsed]
 
     def add_tags(self, item_id: int, tags: List[str]) -> Item:
         """Add tags to an item.
@@ -307,48 +302,10 @@ class ItemsResource(BaseResource):
         return Page(items=items, page_info=page_info)
 
     def _parse_item(self, data: Dict[str, Any]) -> Item:
-        """Parse API response data into an Item model.
+        """Parse one record from a raw response through the generated ``RecordResponseDto``.
 
-        Args:
-            data: Raw API response data
-
-        Returns:
-            Parsed Item object
+        The generated parser iterates ``tags`` and ``labels`` without a null check, so a null
+        list is dropped first and treated as empty.
         """
-        import json as json_lib
-        from datetime import datetime
-
-        # Parse properties if it's a JSON string
-        properties = data.get("properties", {})
-        if isinstance(properties, str):
-            try:
-                properties = json_lib.loads(properties)
-            except (TypeError, ValueError):
-                properties = {}
-
-        # Parse timestamp
-        timestamp_str = data.get("lastUpdatedAt")
-        if timestamp_str:
-            # Handle ISO format with optional microseconds
-            try:
-                timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            except ValueError:
-                timestamp = datetime.now()
-        else:
-            timestamp = datetime.now()
-
-        # Map DeepLynx fields to our generic model (API uses camelCase in response)
-        return Item(
-            id=data["id"],
-            name=data.get("name", ""),
-            description=data.get("description"),
-            properties=properties,
-            class_id=data.get("classId"),
-            original_id=data.get("originalId"),
-            created_at=timestamp,  # Use lastUpdatedAt as both created and updated
-            updated_at=timestamp,
-            tags=[Tag(id=t.get("id"), name=t.get("name", "")) for t in (data.get("tags") or [])],
-            metatype_id=data.get("classId"),
-            metatype_name=data.get("className"),
-            data_source_id=data.get("dataSourceId"),
-        )
+        record = {k: v for k, v in data.items() if not (k in ("tags", "labels") and v is None)}
+        return Item.from_generated(ensure_nexus_client().models.RecordResponseDto.from_dict(record))

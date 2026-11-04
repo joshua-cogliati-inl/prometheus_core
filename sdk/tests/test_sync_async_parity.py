@@ -26,7 +26,7 @@ from prometheus_api.storage_client.resources.items import ItemsResource
 from prometheus_api.storage_client.resources.search import SearchResource
 
 
-# Item get/create/update/delete go through the generated Nexus client
+# Item operations (get/create/update/delete/list/bulk_create) use the generated Nexus client
 ITEM_CLIENT = pytest.mark.requires_nexus_client
 
 
@@ -126,6 +126,7 @@ async def test_item_create_defaults_missing_description_to_name(description):
     assert async_json["description"] == "Sample"
 
 
+@ITEM_CLIENT
 @pytest.mark.parametrize("description", [None, ""])
 async def test_item_bulk_create_defaults_missing_description_to_name(description):
     """Covers REQ-002-02 for the bulk endpoint, sync and async."""
@@ -160,6 +161,7 @@ def paginated_payload(items, **overrides):
     return payload
 
 
+@ITEM_CLIENT
 async def test_item_list_uses_paginated_route_and_server_paging_in_sync_and_async():
     """Covers REQ-002-05: list calls /records/paginated and trusts the server's paging."""
     payload = paginated_payload([item_payload(id=1), item_payload(id=2)])
@@ -181,6 +183,7 @@ async def test_item_list_uses_paginated_route_and_server_paging_in_sync_and_asyn
     assert sync_page.page_info.has_previous is False
 
 
+@ITEM_CLIENT
 async def test_item_list_passes_filters_through_in_sync_and_async():
     """Covers REQ-002-05: extra filters are sent alongside the paging parameters."""
     payload = paginated_payload([], totalCount=0, hasNext=False)
@@ -198,6 +201,7 @@ async def test_item_list_passes_filters_through_in_sync_and_async():
     }
 
 
+@ITEM_CLIENT
 @pytest.mark.parametrize("empty_items", [None, []])
 async def test_item_list_treats_null_or_empty_items_as_empty_page(empty_items):
     """Covers REQ-002-05: the server returns ``items: null`` for an empty result."""
@@ -211,6 +215,7 @@ async def test_item_list_treats_null_or_empty_items_as_empty_page(empty_items):
     assert sync_page.page_info.has_next is False
 
 
+@ITEM_CLIENT
 async def test_item_iter_all_follows_has_next_across_pages_in_sync_and_async():
     """Covers REQ-002-06: iteration stops when the server says there is no next page."""
     pages = {
@@ -553,3 +558,16 @@ def test_item_from_generated_keeps_class_name_and_tags():
 
     assert item.metatype_name == "Sensor"
     assert [(t.id, t.name) for t in item.tags] == [(4, "debug")]
+
+
+@ITEM_CLIENT
+async def test_item_list_and_bulk_create_accept_null_tags_in_sync_and_async():
+    """Covers REQ-002-16: a record whose ``tags`` is null parses as an item with no tags."""
+    page = paginated_payload([item_payload(id=1, tags=None)], hasNext=False)
+
+    sync_page = ItemsResource(SyncClient(page)).list()
+    async_page = await AsyncItemsResource(AsyncClient(page)).list()
+    created = ItemsResource(SyncClient([item_payload(id=2)])).bulk_create([ItemCreate(name="A")])
+
+    assert sync_page.items[0].tags == [] and async_page.items[0].tags == []
+    assert [item.id for item in created] == [2]
