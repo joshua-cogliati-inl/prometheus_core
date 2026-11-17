@@ -28,6 +28,33 @@ step's result. The executor now emits the initial task only for a new task
 No migration steps. Streaming callers that read the initial task event of a resumed
 stream get the task ID and context ID from the status events instead.
 
+## 0.16.0
+
+### `items.list` Filters Are Query Parameters of the Paginated Route
+
+`items.list` and `items.iter_all` now call `GET .../records/paginated` and take `total_count`,
+`has_next` and `has_previous` from the server, where they used to estimate them from the page
+length. Their `filters` are sent as query parameters of that route. The server ignores any
+parameter it doesn't know without an error, so a filter such as `{"properties.status": "active"}`
+used to return unfiltered items. It now raises `ValueError`. This affects agents that pass
+`filters=` to `items.list` or `items.iter_all`.
+
+Migration steps:
+
+1. Use only `dataSourceId`, `fileType`, `hideArchived` and `isInsightEligible` as keys in
+   `filters`.
+2. To filter on record properties, call `search.advanced_query(...)` instead.
+3. Read `page.page_info.total_count` as the server's real count, not an estimate.
+
+```python
+# Before: the property filter was ignored and every item came back
+page = client.items.list(filters={"properties.status": "active"})
+
+# After
+page = client.items.list(filters={"fileType": "csv", "hideArchived": True})
+by_property = client.search.advanced_query({"properties.status": "active"})
+```
+
 ## 0.15.0
 
 ### Register with the Platform Backend; the Platform No Longer Runs LiteLLM
