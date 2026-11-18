@@ -107,25 +107,29 @@ Behavior changes that come with it:
 
 - `files.upload(..., description=...)` now sends the description in the request's `metadata` part.
   Before, it was sent as a top-level form field that the server's upload route has no field for,
-  so, per the notes on the branch this came from, the description did not reach the file's record
-  (not re-checked here).
-- Chunked uploads complete with the number of chunks actually sent, not the number computed from
-  `chunk_size`. The branch's notes say a smaller count than the file's real chunk count truncates
-  the file while the server still answers 200; I did not reproduce that against a server.
+  and on DeepLynx v0.8.0 the file's record got the file name as its description instead: an upload
+  with `description="desc-from-devel"` stored `zz-probe-devel.txt`. The description you pass now
+  reaches the record.
+- `files.upload_chunked` now uploads on DeepLynx v0.8.0. Before, `upload_chunked` on a 3 MiB file
+  with a 1 MiB chunk size failed with `ValidationError: HTTP 400`; It is not known which part of
+  the old request the server rejected. It now completes with the number of chunks actually sent, and
+  the file downloads byte for byte. The module notes say a smaller completion count truncates the
+  file while the server still answers 200; that was not reproduced here.
 - `get_item_relationships` now builds each relationship from the generated `RelatedRecordsResponseDto`,
   which declares only the related record's ID and name, the project ID and the relationship's
-  name. The SDK therefore no longer reads `id`, `properties`, timestamps, `relationshipId` or
-  `dataSourceId` from the list response; they come back as `0`, `{}` or `None`. Earlier versions
-  read those fields if the server sent them. I did not check whether the server ever sent them.
-  `relationships.get(id)` returns the edge without a name, so its `relationship_type` is empty.
+  name. On DeepLynx v0.8.0 the list route sends exactly those four fields, so listed relationships
+  have `id` 0, empty `properties` and no timestamps, as they did before this change (the old
+  parser read `id` and `properties` from the response, but the server never sent them). A server
+  that sends more fields would no longer have them read. `relationships.get(id)` returns the edge
+  without a name, so its `relationship_type` is empty.
 
 Migration steps:
 
 1. Install the generated package into every environment that imports `prometheus_api` (or set
    `NEXUS_PYTHON_CLIENT_PATH`), and add `attrs` and `python-dateutil` if you install it without
    its dependencies.
-2. If your code reads `id`, `properties` or timestamps from `get_item_relationships` results,
-   check that against a running server before upgrading; the SDK no longer fills them in.
+2. Do not rely on `id` or `properties` of the relationships `get_item_relationships` returns;
+   they are `0` and `{}` on v0.8.0. Use `relationships.get(id)` for an edge's properties.
 
 ### `items.list` Filters Are Query Parameters of the Paginated Route
 
