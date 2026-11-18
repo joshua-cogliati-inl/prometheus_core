@@ -13,23 +13,28 @@
 """Sync tags resource."""
 
 from typing import List
+
+from deeplynx_nexus_client.api.project_tag import api_create_a_tag_project
+from deeplynx_nexus_client.api.project_tag import api_get_all_tags_project
+from deeplynx_nexus_client.models import CreateTagRequestDto
 from ..models.tag import TagModel
+from ..exceptions import StorageClientError
 from .base import BaseResource
 
 
 class TagsResource(BaseResource):
-    """Handles operations for project-level tags."""
-
-    @property
-    def _project_path(self) -> str:
-        return f"/projects/{self._client.config.project_id}/tags"
+    """Handles operations for project-level tags through the generated Nexus client."""
 
     def list(self) -> List[TagModel]:
         """List all tags in the active project."""
-        response = self._client._request("GET", self._project_path)
-        data = response.json()
-        records = data if isinstance(data, list) else data.get("value", data.get("tags", []))
-        return [TagModel(**t) for t in records]
+        response = api_get_all_tags_project.sync_detailed(
+            self._client.config.project_id, client=self._generated()
+        )
+        if not isinstance(response.parsed, list):
+            raise StorageClientError(
+                f"Unexpected tag list response (HTTP {int(response.status_code)})"
+            )
+        return [TagModel.from_generated(t) for t in response.parsed]
 
     def create(self, name: str) -> TagModel:
         """Create a new tag in the active project."""
@@ -37,10 +42,16 @@ class TagsResource(BaseResource):
         if not normalized:
             raise ValueError("Tag name must be non-empty")
 
-        response = self._client._request("POST", self._project_path, json={"name": normalized})
-        data = response.json()
-        record = data if (isinstance(data, dict) and data.get("id")) else data.get("value", data)
-        return TagModel(**record)
+        generated = api_create_a_tag_project
+        body = CreateTagRequestDto(name=normalized)
+        response = generated.sync_detailed(
+            self._client.config.project_id, client=self._generated(), body=body
+        )
+        if response.parsed is None or not hasattr(response.parsed, "name"):
+            raise StorageClientError(
+                f"Unexpected tag create response (HTTP {int(response.status_code)})"
+            )
+        return TagModel.from_generated(response.parsed)
 
     def get_or_create(self, name: str) -> TagModel:
         """Return the tag with the given name, creating it if it doesn't exist."""
