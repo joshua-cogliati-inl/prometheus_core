@@ -14,12 +14,21 @@
 
 from pathlib import Path
 from typing import Optional
+from deeplynx_nexus_client.api.file import api_delete_file
+from deeplynx_nexus_client.api.file import api_download_file
+from deeplynx_nexus_client.api.record import api_get_a_record
 from ..models.file import FileMetadata
+from ..exceptions import StorageClientError
+from ..resources.files import build_upload_request, parse_file_record
 from .base import AsyncBaseResource
 
 
 class AsyncFilesResource(AsyncBaseResource):
     """Handles async operations related to file storage and retrieval."""
+
+    def _scope(self) -> tuple:
+        config = self._client.config
+        return config.organization_id, config.project_id
 
     async def upload(
         self, file_path: Path, name: Optional[str] = None, description: Optional[str] = None
@@ -30,18 +39,14 @@ class AsyncFilesResource(AsyncBaseResource):
 
         file_name = name or file_path.name
 
+        organization_id, project_id = self._scope()
         with open(file_path, "rb") as f:
-            files = {"file": (file_name, f)}
-            data = {}
-
-            if description:
-                data["description"] = description
-
-            response = await self._client._request(
-                "POST", f"{self._base_path}/files", files=files, data=data
+            method, path, request = build_upload_request(
+                organization_id, project_id, f, file_name, description
             )
+            response = await self._client._request(method, path, **request)
 
-        return self._parse_file_metadata(response.json())
+        return parse_file_record(response.json())
 
     async def upload_chunked(
         self,
@@ -57,24 +62,57 @@ class AsyncFilesResource(AsyncBaseResource):
         return await uploader.upload(file_path, name, description)
 
     async def get(self, file_id: int) -> FileMetadata:
-        """Get file metadata by ID asynchronously."""
-        # Files are retrieved via records endpoint (they're records with file attachments)
-        response = await self._client._request("GET", f"{self._base_path}/records/{file_id}")
+        """Get file metadata by ID.
 
-        return self._parse_file_metadata(response.json())
+        Files are records, so this reads the record.
+
+        Raises:
+            ItemNotFoundError: If file doesn't exist
+        """
+        organization_id, project_id = self._scope()
+        response = await api_get_a_record.asyncio_detailed(
+            organization_id, project_id, file_id, client=self._generated()
+        )
+        if response.parsed is None or not hasattr(response.parsed, "id"):
+            raise StorageClientError(
+                f"Unexpected response to get file (HTTP {int(response.status_code)})"
+            )
+        return FileMetadata.from_generated(response.parsed)
 
     async def download(self, file_id: int, output_path: Path) -> None:
-        """Download a file to local storage asynchronously."""
-        # Download using the files endpoint with record ID
-        response = await self._client._request("GET", f"{self._base_path}/files/{file_id}")
+        """Download a file to local storage.
+
+        Args:
+            file_id: File identifier (record ID from upload)
+            output_path: Where to save the downloaded file
+
+        Raises:
+            ItemNotFoundError: If file doesn't exist
+
+        Example:
+            ```python
+            await client.files.download(123, Path("downloaded.csv"))
+            ```
+        """
+        organization_id, project_id = self._scope()
+        response = await api_download_file.asyncio_detailed(
+            organization_id, project_id, file_id, client=self._generated()
+        )
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "wb") as f:
             f.write(response.content)
 
     async def delete(self, file_id: int) -> None:
-        """Delete a file asynchronously."""
-        await self._client._request("DELETE", f"{self._base_path}/files/{file_id}")
+        """Delete a file.
+
+        Raises:
+            ItemNotFoundError: If file doesn't exist
+        """
+        organization_id, project_id = self._scope()
+        await api_delete_file.asyncio_detailed(
+            organization_id, project_id, file_id, client=self._generated()
+        )
 
     def _parse_file_metadata(self, data: dict) -> FileMetadata:
         """Parse API response data into FileMetadata model."""
