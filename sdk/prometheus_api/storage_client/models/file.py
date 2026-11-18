@@ -12,10 +12,12 @@
 
 """File models for the storage client."""
 
-from typing import Optional
+from typing import Any, Optional
 from pathlib import Path
 from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
+
+from .item import value_of
 
 
 class FileMetadata(BaseModel):
@@ -31,6 +33,25 @@ class FileMetadata(BaseModel):
     updated_at: Optional[datetime] = Field(None, description="Last update timestamp")
 
     model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_generated(cls, dto: Any) -> "FileMetadata":
+        """Build file metadata from a generated ``RecordResponseDto`` (a file is a record).
+
+        Records carry no creation time, so ``created_at`` is ``None``; ``lastUpdatedAt`` is the
+        update time. ``size`` is the record's ``fileSize`` and ``file_type`` its ``fileType``.
+        """
+        file_size = value_of(dto, "file_size")
+        return cls(
+            id=int(dto.id),
+            name=value_of(dto, "name") or "",
+            description=value_of(dto, "description"),
+            file_type=value_of(dto, "file_type"),
+            size=None if file_size is None else int(file_size),
+            uri=value_of(dto, "uri"),
+            created_at=None,
+            updated_at=value_of(dto, "last_updated_at"),
+        )
 
 
 class FileUpload(BaseModel):

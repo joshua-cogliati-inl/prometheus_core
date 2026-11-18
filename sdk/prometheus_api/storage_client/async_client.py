@@ -14,6 +14,8 @@
 
 from typing import Dict, Optional
 import httpx
+from deeplynx_nexus_client.api.project_data_source import api_get_default_data_source_for_project
+from .nexus_routing import generated_client
 from .connection import ConnectionConfig
 from .auth import AsyncAuthHandler
 from .exceptions import (
@@ -212,11 +214,13 @@ class AsyncStorageClient:
 
         # Fetch default data source from API
         try:
-            response = await self._request(
-                "GET", f"/projects/{self.config.project_id}/datasources/default"
+            response = await api_get_default_data_source_for_project.asyncio_detailed(
+                self.config.project_id, client=generated_client(self, asynchronous=True)
             )
-            data = response.json()
-            self._default_data_source_id = data.get("id")
+            data_source_id = getattr(response.parsed, "id", None)
+            self._default_data_source_id = (
+                int(data_source_id) if isinstance(data_source_id, (int, str)) else None
+            )
 
             if not self._default_data_source_id:
                 raise StorageClientError("No default data source found")
