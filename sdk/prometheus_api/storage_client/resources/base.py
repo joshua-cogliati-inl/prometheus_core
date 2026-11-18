@@ -12,7 +12,9 @@
 
 """Base resource class for synchronous API operations."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from ..nexus_routing import generated_client
 
 if TYPE_CHECKING:
     from ..client import StorageClient
@@ -34,3 +36,7 @@ class BaseResource:
             f"/organizations/{self._client.config.organization_id}"
             f"/projects/{self._client.config.project_id}"
         )
+
+    def _generated(self) -> Any:
+        """The generated Nexus client whose requests go through this client's ``_request``."""
+        return generated_client(self._client)
