@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from prometheus_api.storage_client.async_resources.relationships import (
@@ -28,17 +29,21 @@ from prometheus_api.storage_client.models.relationship import (
 from prometheus_api.storage_client.resources.relationships import RelationshipsResource
 
 
-class Response:
-    def __init__(self, payload):
-        self._payload = payload
+# get/delete/list go through the generated Nexus client; create still uses the old transport
 
-    def json(self):
-        return self._payload
+
+class Response(httpx.Response):
+    """A real HTTP 200 response: the generated client parses status, headers and body."""
+
+    def __init__(self, payload):
+        super().__init__(200, json=payload)
 
 
 class SyncClient:
     def __init__(self, payload):
-        self.config = SimpleNamespace(organization_id=1, project_id=2)
+        self.config = SimpleNamespace(
+            organization_id=1, project_id=2, base_url="http://nexus.test/api/v1"
+        )
         self.calls = []
         self._payload = payload
         # Types used by the parsing tests resolve from the cache, not the network.
@@ -143,27 +148,31 @@ async def test_bulk_create_parses_string_properties_in_sync_and_async():
     assert [r.properties for r in sync] == [{"strength": "strong"}, {}]
 
 
-async def test_item_relationship_listing_parses_string_properties_in_sync_and_async():
-    """Covers REQ-003-14 for the simplified list format (``relatedRecordId``)."""
+async def test_item_relationship_listing_uses_the_record_edges_route_in_sync_and_async():
+    """Covers REQ-003-09: the list route returns the related record and the relationship name."""
     payload = [
         {
-            "id": 5,
+            "relatedRecordName": "other",
             "relatedRecordId": 59,
-            "name": "linked",
-            "properties": '{"k": 1}',
-            "relationshipId": 3,
-            "dataSourceId": 91,
+            "relatedRecordProjectId": 67,
+            "relationshipName": "linked",
         }
     ]
+    sync_client, async_client = SyncClient(payload), AsyncClient(payload)
 
-    sync = RelationshipsResource(SyncClient(payload)).get_item_relationships(58, "outgoing")
-    asynchronous = await AsyncRelationshipsResource(AsyncClient(payload)).get_item_relationships(
+    sync = RelationshipsResource(sync_client).get_item_relationships(58, "outgoing")
+    asynchronous = await AsyncRelationshipsResource(async_client).get_item_relationships(
         58, "outgoing"
     )
 
     assert [r.model_dump() for r in sync] == [r.model_dump() for r in asynchronous]
+    assert sync_client.calls == async_client.calls
+    method, path, kwargs = sync_client.calls[0]
+    assert (method, path) == ("GET", "/organizations/1/projects/2/records/58/edges")
+    assert kwargs["params"] == {"isOrigin": True, "page": 1, "pageSize": 100}
     assert (sync[0].from_item_id, sync[0].to_item_id) == (58, 59)
-    assert sync[0].properties == {"k": 1}
+    assert sync[0].relationship_type == "linked"
+    assert sync[0].properties == {}
 
 
 class RoutedClient:
@@ -370,3 +379,89 @@ async def test_find_edge_unwraps_a_value_envelope_in_sync_and_async():
 
     assert edge.model_dump() == edge_async.model_dump()
     assert (edge.from_item_id, edge.to_item_id) == (58, 59)
+
+
+async def test_item_relationship_listing_maps_incoming_and_combines_both_directions():
+    """Covers REQ-003-09: incoming puts the item last; no direction concatenates both."""
+    payload = [{"relatedRecordId": 59, "relationshipName": "linked"}]
+
+    incoming = RelationshipsResource(SyncClient(payload)).get_item_relationships(58, "incoming")
+    both_client = SyncClient(payload)
+    both = RelationshipsResource(both_client).get_item_relationships(58)
+    both_async_client = AsyncClient(payload)
+    both_async = await AsyncRelationshipsResource(both_async_client).get_item_relationships(58)
+
+    assert (incoming[0].from_item_id, incoming[0].to_item_id) == (59, 58)
+    assert [c[2]["params"]["isOrigin"] for c in both_client.calls] == [True, False]
+    assert both_client.calls == both_async_client.calls
+    assert [(r.from_item_id, r.to_item_id) for r in both] == [(58, 59), (59, 58)]
+    assert [r.model_dump() for r in both] == [r.model_dump() for r in both_async]
+
+
+async def test_get_and_delete_use_edge_routes_in_sync_and_async():
+    """Covers REQ-003-08: get and delete address /edges/{id} through the generated client."""
+    sync_client, async_client = SyncClient(edge_payload()), AsyncClient(edge_payload())
+
+    RelationshipsResource(sync_client).get(11)
+    RelationshipsResource(sync_client).delete(11)
+    await AsyncRelationshipsResource(async_client).get(11)
+    await AsyncRelationshipsResource(async_client).delete(11)
+
+    assert sync_client.calls == async_client.calls
+    assert [c[:2] for c in sync_client.calls] == [
+        ("GET", "/organizations/1/projects/2/edges/11"),
+        ("DELETE", "/organizations/1/projects/2/edges/11"),
+    ]
+
+
+def test_get_without_node_ids_raises_value_error():
+    """Covers REQ-003-10: an edge with no origin/destination is rejected, not half-built."""
+    client = SyncClient(edge_payload(originId=None, destinationId=None))
+
+    with pytest.raises(ValueError, match="missing required node ID"):
+        RelationshipsResource(client).get(11)
+
+
+GRAPH = {
+    "nodes": [
+        {"id": 249, "label": "a", "type": "root", "classId": None, "className": None},
+        {"id": 250, "label": "b", "type": "node", "classId": 3, "className": "Sensor"},
+    ],
+    "links": [
+        {
+            "edgeId": 67,
+            "relationshipId": 36,
+            "relationshipName": "depends_on",
+            "source": 249,
+            "target": 250,
+        }
+    ],
+}
+
+
+async def test_item_graph_returns_the_server_graph_in_sync_and_async():
+    """Covers REQ-003-11: the graph route is called with the depth and the graph is unchanged."""
+    sync_client, async_client = SyncClient(GRAPH), AsyncClient(GRAPH)
+
+    sync = RelationshipsResource(sync_client).get_item_graph(249, depth=2)
+    asynchronous = await AsyncRelationshipsResource(async_client).get_item_graph(249, depth=2)
+
+    assert sync == asynchronous == GRAPH
+    assert sync_client.calls == async_client.calls
+    method, path, kwargs = sync_client.calls[0]
+    assert (method, path) == ("GET", "/organizations/1/projects/2/records/249/graph")
+    assert kwargs["params"] == {"depth": 2}
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({}, {}),
+        ({"nodes": None, "links": None}, {"nodes": None, "links": None}),
+        ([1, 2], {"result": [1, 2]}),
+        ("text", {"result": "text"}),
+    ],
+)
+def test_item_graph_handles_empty_null_and_non_object_bodies(payload, expected):
+    """Covers REQ-003-11: an empty graph is a dict, and a non-object body is wrapped."""
+    assert RelationshipsResource(SyncClient(payload)).get_item_graph(1) == expected

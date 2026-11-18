@@ -12,7 +12,14 @@
 
 """Relationships resource for synchronous operations."""
 
+import json
 from typing import Any, Dict, List, Optional
+from deeplynx_nexus_client.api.edge import api_delete_edge_by_id
+from deeplynx_nexus_client.api.edge import api_get_edge_by_id
+from deeplynx_nexus_client.api.record import api_get_edges_by_record
+from deeplynx_nexus_client.api.record import api_get_graph_data_for_record
+from deeplynx_nexus_client.models import EdgeResponseDto, GraphResponse
+from ..models.item import value_of
 from ..models.relationship import Relationship, RelationshipCreate
 from ..exceptions import StorageClientError
 from .base import BaseResource
@@ -20,6 +27,32 @@ from .base import BaseResource
 
 class RelationshipsResource(BaseResource):
     """Handles operations related to relationships between items."""
+
+    def _scope(self) -> tuple:
+        config = self._client.config
+        return config.organization_id, config.project_id
+
+    @staticmethod
+    def _edge(response: Any, action: str) -> Relationship:
+        """Build a relationship from a generated edge response.
+
+        Some DeepLynx endpoints wrap the edge in ``{"value": ...}``; the generated parser does
+        not see through that, so the wrapped body is re-parsed here.
+        """
+        parsed = response.parsed
+        if parsed is not None and value_of(parsed, "origin_id") is None:
+            try:
+                body = json.loads(response.content)
+            except ValueError:
+                body = None
+            if isinstance(body, dict) and isinstance(body.get("value"), dict):
+                dto = EdgeResponseDto.from_dict(body["value"])
+                return Relationship.from_generated(dto)
+        if parsed is None or not hasattr(parsed, "id"):
+            raise StorageClientError(
+                f"Unexpected response to {action} (HTTP {int(response.status_code)})"
+            )
+        return Relationship.from_generated(parsed)
 
     def create(self, relationship: RelationshipCreate) -> Relationship:
         """Create a new relationship between two items.
@@ -131,35 +164,25 @@ class RelationshipsResource(BaseResource):
     def get(self, relationship_id: int) -> Relationship:
         """Get a relationship by ID.
 
-        Args:
-            relationship_id: Relationship identifier
-
-        Returns:
-            Relationship data
-
         Raises:
             ItemNotFoundError: If relationship doesn't exist
         """
-        response = self._client._request("GET", f"{self._base_path}/edges/{relationship_id}")
-
-        data = response.json()
-
-        # Some DeepLynx endpoints wrap response in 'value' field
-        if isinstance(data, dict) and "value" in data:
-            data = data["value"]
-
-        return self._parse_relationship(data)
+        organization_id, project_id = self._scope()
+        response = api_get_edge_by_id.sync_detailed(
+            organization_id, project_id, relationship_id, client=self._generated()
+        )
+        return self._edge(response, "get relationship")
 
     def delete(self, relationship_id: int) -> None:
         """Delete a relationship.
 
-        Args:
-            relationship_id: Relationship identifier
-
         Raises:
             ItemNotFoundError: If relationship doesn't exist
         """
-        self._client._request("DELETE", f"{self._base_path}/edges/{relationship_id}")
+        organization_id, project_id = self._scope()
+        api_delete_edge_by_id.sync_detailed(
+            organization_id, project_id, relationship_id, client=self._generated()
+        )
 
     def bulk_create(self, relationships: List[RelationshipCreate]) -> List[Relationship]:
         """Create multiple relationships in a single request.
@@ -206,14 +229,12 @@ class RelationshipsResource(BaseResource):
             direction: Filter by direction ('outgoing', 'incoming', or None for both)
 
         Returns:
-            List of relationships
+            List of relationships. The list route returns only the related record and the
+            relationship's name, so ``id`` is 0 and ``properties`` is empty.
 
         Example:
             ```python
-            # Get all relationships
             all_rels = client.relationships.get_item_relationships(123)
-
-            # Get only outgoing relationships
             outgoing = client.relationships.get_item_relationships(123, "outgoing")
             ```
         """
@@ -223,64 +244,26 @@ class RelationshipsResource(BaseResource):
             incoming = self.get_item_relationships(item_id, "incoming")
             return outgoing + incoming
 
-        params: Dict[str, Any] = {
-            "page": 1,
-            "pageSize": 100,  # Maximum allowed by DeepLynx API
-        }
-
-        # Map direction to isOrigin boolean
-        # outgoing: this item is the origin (isOrigin=true)
-        # incoming: this item is the destination (isOrigin=false)
-        if direction == "outgoing":
-            params["isOrigin"] = "true"
-        elif direction == "incoming":
-            params["isOrigin"] = "false"
-
-        response = self._client._request(
-            "GET", f"{self._base_path}/records/{item_id}/edges", params=params
+        # outgoing: this item is the origin (isOrigin=true); incoming: it is the destination
+        is_origin = direction == "outgoing"
+        organization_id, project_id = self._scope()
+        response = api_get_edges_by_record.sync_detailed(
+            organization_id,
+            project_id,
+            item_id,
+            client=self._generated(),
+            is_origin=is_origin,
+            page=1,
+            page_size=100,  # Maximum allowed by DeepLynx API
         )
-
-        data = response.json()
-
-        # API may return edges directly as a list or wrapped in a dict
-        if isinstance(data, list):
-            edges = data
-        else:
-            edges = data.get("edges", [])
-
-        # Parse relationships, handling different response formats
-        relationships = []
-        for rel_data in edges:
-            # Check if this is the simplified format (from list endpoint)
-            if "relatedRecordId" in rel_data:
-                # Simplified format: reconstruct full relationship
-                if direction == "outgoing":
-                    from_id = item_id
-                    to_id = rel_data.get("relatedRecordId")
-                else:  # incoming
-                    from_id = rel_data.get("relatedRecordId")
-                    to_id = item_id
-
-                relationships.append(
-                    Relationship(
-                        id=rel_data.get("id", 0),
-                        from_item_id=from_id,
-                        to_item_id=to_id,
-                        relationship_type=rel_data.get("relationshipName")
-                        or rel_data.get("name")
-                        or "",
-                        properties=rel_data.get("properties", {}),
-                        created_at=rel_data.get("createdAt"),
-                        updated_at=rel_data.get("lastUpdatedAt"),
-                        relationship_pair_id=rel_data.get("relationshipId"),
-                        data_source_id=rel_data.get("dataSourceId"),
-                    )
-                )
-            else:
-                # Full format: use standard parser
-                relationships.append(self._parse_relationship(rel_data))
-
-        return relationships
+        if not isinstance(response.parsed, list):
+            raise StorageClientError(
+                f"Unexpected response to list relationships (HTTP {int(response.status_code)})"
+            )
+        return [
+            Relationship.from_related_record(related, item_id, is_origin)
+            for related in response.parsed
+        ]
 
     def get_item_graph(self, item_id: int, depth: int = 1) -> Dict[str, Any]:
         """Get a graph of relationships starting from an item.
@@ -290,19 +273,27 @@ class RelationshipsResource(BaseResource):
             depth: How many levels deep to traverse
 
         Returns:
-            Graph structure with items and relationships
+            Graph structure: ``{"nodes": [...], "links": [...]}`` as the server sends it
+            (camelCase keys). A body that is not an object is returned as ``{"result": body}``.
 
         Example:
             ```python
             graph = client.relationships.get_item_graph(123, depth=2)
             ```
         """
-        response = self._client._request(
-            "GET", f"{self._base_path}/records/{item_id}/graph", params={"depth": depth}
+        organization_id, project_id = self._scope()
+        # The generated operation parses the body as a graph object and fails on any other JSON
+        # type, so only its request is used; the body is parsed here to keep the wrapping below.
+        request = api_get_graph_data_for_record._get_kwargs(
+            organization_id, project_id, item_id, depth=depth
         )
-
-        data = response.json()
-        return data if isinstance(data, dict) else {"result": data}
+        response = self._client._request(
+            request["method"].upper(), request["url"], params=request["params"]
+        )
+        body = response.json()
+        if not isinstance(body, dict):
+            return {"result": body}
+        return dict(GraphResponse.from_dict(body).to_dict())
 
     def _parse_relationship(self, data: Dict[str, Any]) -> Relationship:
         """Parse API response data into a Relationship model.
