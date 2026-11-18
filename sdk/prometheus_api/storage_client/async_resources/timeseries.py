@@ -14,7 +14,7 @@
 
 from typing import Optional, Sequence
 from ..models.timeseries import TimeseriesResult
-from ..resources.timeseries import build_query_payload, parse_query_response
+from ..resources.timeseries import build_query_request, parse_query_response
 from .base import AsyncBaseResource
 
 
@@ -38,11 +38,18 @@ class AsyncTimeseriesResource(AsyncBaseResource):
         Takes the same arguments and returns the same result as
         ``TimeseriesResource.query``; see its documentation for the server's rules.
         """
-        response = await self._client._request(
-            "POST",
-            f"{self._base_path}/records/{int(record_id)}/olap/query",
-            params={"viewName": view_name},
-            json=build_query_payload(sql_query, limit, row_stride, start_row, stop_row, columns),
+        config = self._client.config
+        method, path, request = build_query_request(
+            config.organization_id,
+            config.project_id,
+            record_id,
+            view_name,
+            sql_query,
+            limit,
+            row_stride,
+            start_row,
+            stop_row,
+            columns,
         )
-
+        response = await self._client._request(method, path, **request)
         return parse_query_response(response.json())

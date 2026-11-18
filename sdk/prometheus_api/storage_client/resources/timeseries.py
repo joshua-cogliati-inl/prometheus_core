@@ -12,30 +12,47 @@
 
 """Timeseries resource for synchronous operations."""
 
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence, Tuple
+from deeplynx_nexus_client.api.olap import api_execute_olap_query
+from deeplynx_nexus_client.models import OlapQueryRequestDto
+from deeplynx_nexus_client.types import UNSET
 from ..exceptions import StorageClientError
 from ..models.timeseries import TimeseriesResult
 from .base import BaseResource
 
 
-def build_query_payload(
+def build_query_request(
+    organization_id: int,
+    project_id: int,
+    record_id: int,
+    view_name: str,
     sql_query: Optional[str],
     limit: Optional[int],
     row_stride: Optional[int],
     start_row: Optional[int],
     stop_row: Optional[int],
     columns: Optional[Sequence[str]],
-) -> Dict[str, Any]:
-    """The JSON body for ``olap/query``: only the options the caller provided, camelCase."""
-    candidates = {
-        "query": sql_query,
-        "limit": limit,
-        "rowStride": row_stride,
-        "startRow": start_row,
-        "stopRow": stop_row,
-        "columns": list(columns) if columns is not None else None,
-    }
-    return {key: value for key, value in candidates.items() if value is not None}
+) -> Tuple[str, str, Dict[str, Any]]:
+    """The ``olap/query`` request as ``(method, path, request kwargs)``.
+
+    Built from the generated operation and ``OlapQueryRequestDto``, so the path and the body's
+    camelCase names come from the Nexus API description. Only the options the caller provided
+    (not ``None``) are in the body; falsy values such as ``0`` or ``""`` are kept. ``record_id``
+    goes through ``int()``, so a value that is not a whole number raises before anything is sent.
+    """
+    body = OlapQueryRequestDto(
+        query=UNSET if sql_query is None else sql_query,
+        limit=UNSET if limit is None else limit,
+        row_stride=UNSET if row_stride is None else row_stride,
+        start_row=UNSET if start_row is None else start_row,
+        stop_row=UNSET if stop_row is None else stop_row,
+        columns=UNSET if columns is None else list(columns),
+    )
+    request = api_execute_olap_query._get_kwargs(
+        organization_id, project_id, int(record_id), body=body, view_name=view_name
+    )
+    method, path = request.pop("method"), request.pop("url")
+    return str(method).upper(), str(path), request
 
 
 def parse_query_response(data: Any) -> TimeseriesResult:
@@ -116,11 +133,18 @@ class TimeseriesResource(BaseResource):
             print(result.columns, result.data[:3])
             ```
         """
-        response = self._client._request(
-            "POST",
-            f"{self._base_path}/records/{int(record_id)}/olap/query",
-            params={"viewName": view_name},
-            json=build_query_payload(sql_query, limit, row_stride, start_row, stop_row, columns),
+        config = self._client.config
+        method, path, request = build_query_request(
+            config.organization_id,
+            config.project_id,
+            record_id,
+            view_name,
+            sql_query,
+            limit,
+            row_stride,
+            start_row,
+            stop_row,
+            columns,
         )
-
+        response = self._client._request(method, path, **request)
         return parse_query_response(response.json())
