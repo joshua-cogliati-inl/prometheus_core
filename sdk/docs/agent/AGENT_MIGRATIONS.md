@@ -90,6 +90,43 @@ result = client.timeseries.query(
 print(result.columns, result.data[:3])
 ```
 
+### The Storage Client Needs the Generated Nexus Client Package
+
+`prometheus_api.storage_client` now imports `deeplynx_nexus_client` (the generated Nexus Python
+client) when it loads, and sends tags, items, search results, relationships, timeseries queries,
+file operations and the default-data-source lookup through it. Importing the storage client
+without the package raises an `ImportError` that says how to get it. The package is not published
+to an index yet, so it is not in this package's dependencies: install it from its checkout, or set
+`NEXUS_PYTHON_CLIENT_PATH` to a directory that contains `deeplynx_nexus_client`. This affects every
+agent image, test environment and script that imports `prometheus_api` (including `prometheus_api.agent`, which uses the storage client).
+
+Requests still go through the storage client's own `_request`, so authentication, retries and
+error mapping are unchanged.
+
+Behavior changes that come with it:
+
+- `files.upload(..., description=...)` now sends the description in the request's `metadata` part.
+  Before, it was sent as a top-level form field that the server's upload route has no field for,
+  so, per the notes on the branch this came from, the description did not reach the file's record
+  (not re-checked here).
+- Chunked uploads complete with the number of chunks actually sent, not the number computed from
+  `chunk_size`. The branch's notes say a smaller count than the file's real chunk count truncates
+  the file while the server still answers 200; I did not reproduce that against a server.
+- `get_item_relationships` now builds each relationship from the generated `RelatedRecordsResponseDto`,
+  which declares only the related record's ID and name, the project ID and the relationship's
+  name. The SDK therefore no longer reads `id`, `properties`, timestamps, `relationshipId` or
+  `dataSourceId` from the list response; they come back as `0`, `{}` or `None`. Earlier versions
+  read those fields if the server sent them. I did not check whether the server ever sent them.
+  `relationships.get(id)` returns the edge without a name, so its `relationship_type` is empty.
+
+Migration steps:
+
+1. Install the generated package into every environment that imports `prometheus_api` (or set
+   `NEXUS_PYTHON_CLIENT_PATH`), and add `attrs` and `python-dateutil` if you install it without
+   its dependencies.
+2. If your code reads `id`, `properties` or timestamps from `get_item_relationships` results,
+   check that against a running server before upgrading; the SDK no longer fills them in.
+
 ### `items.list` Filters Are Query Parameters of the Paginated Route
 
 `items.list` and `items.iter_all` now call `GET .../records/paginated` and take `total_count`,
