@@ -13,27 +13,23 @@
 import asyncio
 from types import SimpleNamespace
 
+import httpx
+
 from prometheus_api.storage_client.async_resources.tags import AsyncTagsResource
 from prometheus_api.storage_client.async_resources.items import AsyncItemsResource
 from prometheus_api.storage_client.resources.items import ItemsResource
 from prometheus_api.storage_client.resources.tags import TagsResource
 
 
-class _Response:
-    def __init__(self, payload):
-        self._payload = payload
-
-    def json(self):
-        return self._payload
-
-
 class _SyncClient:
     def __init__(self):
-        self.config = SimpleNamespace(organization_id=1, project_id=42)
+        self.config = SimpleNamespace(
+            organization_id=1, project_id=42, base_url="http://nexus.test/api/v1"
+        )
         self.calls = []
         self._responses = [
-            _Response([]),
-            _Response({"id": 11, "name": "debug"}),
+            httpx.Response(200, json=[]),
+            httpx.Response(200, json={"id": 11, "name": "debug"}),
         ]
 
     def _request(self, method, path, **kwargs):
@@ -43,7 +39,9 @@ class _SyncClient:
 
 class _AsyncClient:
     def __init__(self, responses):
-        self.config = SimpleNamespace(organization_id=1, project_id=42)
+        self.config = SimpleNamespace(
+            organization_id=1, project_id=42, base_url="http://nexus.test/api/v1"
+        )
         self.calls = []
         self._responses = list(responses)
 
@@ -60,16 +58,20 @@ def test_sync_tags_use_project_scope():
 
     assert resolved == [11]
     assert client.calls == [
-        ("GET", "/projects/42/tags", {}),
-        ("POST", "/projects/42/tags", {"json": {"name": "debug"}}),
+        ("GET", "/projects/42/tags", {"params": {"hideArchived": True}}),
+        (
+            "POST",
+            "/projects/42/tags",
+            {"json": {"name": "debug"}, "headers": {"Content-Type": "application/json"}},
+        ),
     ]
 
 
 def test_async_tags_reject_non_positive_ids():
     client = _AsyncClient(
         [
-            _Response([]),
-            _Response({"id": 0, "name": "debug"}),
+            httpx.Response(200, json=[]),
+            httpx.Response(200, json={"id": 0, "name": "debug"}),
         ]
     )
     resource = AsyncTagsResource(client)
@@ -81,8 +83,12 @@ def test_async_tags_reject_non_positive_ids():
         assert "valid positive id" in str(exc)
 
     assert client.calls == [
-        ("GET", "/projects/42/tags", {}),
-        ("POST", "/projects/42/tags", {"json": {"name": "debug"}}),
+        ("GET", "/projects/42/tags", {"params": {"hideArchived": True}}),
+        (
+            "POST",
+            "/projects/42/tags",
+            {"json": {"name": "debug"}, "headers": {"Content-Type": "application/json"}},
+        ),
     ]
 
 
@@ -90,15 +96,16 @@ def test_sync_item_add_tags_uses_singular_tag_id_params():
     client = _SyncClient()
     client.tags = SimpleNamespace(resolve_ids=lambda names: [11, 12])
     client._responses = [
-        _Response({}),
-        _Response({}),
-        _Response(
-            {
+        httpx.Response(200),
+        httpx.Response(200),
+        httpx.Response(
+            200,
+            json={
                 "id": 99,
                 "name": "artifact",
-                "properties": {},
+                "properties": "{}",
                 "tags": [{"id": 11, "name": "debug"}, {"id": 12, "name": "svg"}],
-            }
+            },
         ),
     ]
     resource = ItemsResource(client)
@@ -109,22 +116,23 @@ def test_sync_item_add_tags_uses_singular_tag_id_params():
     assert client.calls == [
         ("POST", "/organizations/1/projects/42/records/99/tags", {"params": {"tagId": 11}}),
         ("POST", "/organizations/1/projects/42/records/99/tags", {"params": {"tagId": 12}}),
-        ("GET", "/organizations/1/projects/42/records/99", {}),
+        ("GET", "/organizations/1/projects/42/records/99", {"params": {"hideArchived": True}}),
     ]
 
 
 def test_async_item_add_tags_uses_singular_tag_id_params():
     client = _AsyncClient(
         [
-            _Response({}),
-            _Response({}),
-            _Response(
-                {
+            httpx.Response(200),
+            httpx.Response(200),
+            httpx.Response(
+                200,
+                json={
                     "id": 99,
                     "name": "artifact",
-                    "properties": {},
+                    "properties": "{}",
                     "tags": [{"id": 11, "name": "debug"}, {"id": 12, "name": "svg"}],
-                }
+                },
             ),
         ]
     )
@@ -137,7 +145,7 @@ def test_async_item_add_tags_uses_singular_tag_id_params():
     assert client.calls == [
         ("POST", "/organizations/1/projects/42/records/99/tags", {"params": {"tagId": 11}}),
         ("POST", "/organizations/1/projects/42/records/99/tags", {"params": {"tagId": 12}}),
-        ("GET", "/organizations/1/projects/42/records/99", {}),
+        ("GET", "/organizations/1/projects/42/records/99", {"params": {"hideArchived": True}}),
     ]
 
 
