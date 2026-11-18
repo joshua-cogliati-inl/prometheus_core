@@ -110,11 +110,15 @@ Behavior changes that come with it:
   and on DeepLynx v0.8.0 the file's record got the file name as its description instead: an upload
   with `description="desc-from-devel"` stored `zz-probe-devel.txt`. The description you pass now
   reaches the record.
-- `files.upload_chunked` now uploads on DeepLynx v0.8.0. Before, `upload_chunked` on a 3 MiB file
-  with a 1 MiB chunk size failed with `ValidationError: HTTP 400`; It is not known which part of
-  the old request the server rejected. It now completes with the number of chunks actually sent, and
-  the file downloads byte for byte. The module notes say a smaller completion count truncates the
-  file while the server still answers 200; that was not reproduced here.
+- `files.upload_chunked` now works on DeepLynx v0.8.0. Before, it failed at the first request:
+  the start request's snake_case body (`file_name`, `file_size`) gets `ValidationError: HTTP 400`,
+  and the server accepts the camelCase body (`fileName`, `fileSize`) that the generated client
+  sends. (Only the start request was tried with the old body; the chunk and complete requests
+  were not.) A 3 MiB file in 1 MiB chunks now
+  uploads and downloads byte for byte. The completion request carries the number of chunks
+  actually sent, not the count the server suggests: its start response asks for one 100 MB chunk
+  (`totalChunks: 1`) whatever `chunkSize` is sent, and completing a 4-chunk upload with
+  `totalChunks: 1` answers HTTP 200 but stores only the first chunk (1,048,576 of 3,145,851 bytes).
 - `get_item_relationships` now builds each relationship from the generated `RelatedRecordsResponseDto`,
   which declares only the related record's ID and name, the project ID and the relationship's
   name. On DeepLynx v0.8.0 the list route sends exactly those four fields, so listed relationships
