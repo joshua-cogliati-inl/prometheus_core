@@ -24,6 +24,7 @@ Support non-record storage workflows: binary files, large chunked uploads, relat
 - REQ-003-14: `Relationship` MUST accept `properties` as the JSON-encoded string (or `null`) that DeepLynx edge endpoints return, decoding it to a dict; a string that is not valid JSON or does not decode to an object MUST become an empty dict.
 - REQ-003-15: Relationship `create` and `bulk_create` MUST send a nonblank `relationship_type` as the `relationship_id` of the project's relationship type with that name, creating the type at `/projects/{project_id}/relationships` when no unarchived type has that name, and MUST NOT send the name in a field the edge endpoint ignores. Type IDs MUST be cached per client. If creating the type fails, the type MUST be looked up again and reused when present; otherwise the failure MUST propagate. An empty `relationship_type` sends no `relationship_id`. Parsed relationships MUST read the type name from `relationshipName`.
 - REQ-003-16: `find_edge(from_item_id, to_item_id)` MUST return the edge for that ordered pair from `/edges/by-relationship`, and MUST return `None` when the lookup fails, because DeepLynx answers a missing edge with an error rather than an empty result.
+- REQ-003-17: Chunked upload start, chunk and complete requests MUST use the camelCase names DeepLynx accepts (`fileName`, `fileSize`, `chunkSize`, `uploadId`, `chunkNumber`, `totalChunks`) and read the session ID from the start response's `uploadId`. A description MUST travel in the completion request's `metadata` (`Name`, `Description`, `Properties`) and not as a top-level field, and no `metadata` is sent without one.
 - REQ-003-18: When `upload` is given a non-empty description, the request MUST include a `metadata` multipart part (a `metadata.json` file of `application/json`) holding `{"Name": <stored name>, "Description": <description>, "Properties": {}}`: the server's upload route has no description field, requires all three keys with exactly that casing, and uses `Name` for the record name. Without a description there MUST be no `metadata` part. Before this requirement the description was sent as a form field the server ignores, so uploaded files always got the file name as their description.
 
 ## Behavior
@@ -65,5 +66,5 @@ Support non-record storage workflows: binary files, large chunked uploads, relat
 - Relationship graph traversal semantics beyond forwarding `depth` are not defined here.
 
 ## Open questions
-- The relationship parser's error paths need focused unit tests.
+- Relationship parser error paths and graph wrapping need focused unit tests.
 - The sync/async parity suite currently covers item and search behavior more directly than file/relationship/timeseries behavior.
